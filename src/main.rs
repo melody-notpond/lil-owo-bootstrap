@@ -3,9 +3,7 @@ use lil_owo_bootstrap::ir;
 
 fn main() {
     let parse = "
-    ; this is a comment
-    ; this is another comment
-    begin; this is comment too
+    begin
         (func factorial (n)
             (begin
                 ((func factorial-tail (n acc) 

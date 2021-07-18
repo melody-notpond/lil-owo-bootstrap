@@ -66,7 +66,7 @@ impl Display for IrInstruction {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum IrArgument {
     Literal(f64),
     Local(usize),
@@ -102,7 +102,7 @@ pub struct IrSsa {
 impl Display for IrSsa {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(l) = self.local {
-            write!(f, "%{} = ", l)?;
+            write!(f, "%{}[{}] = ", l, self.local_lifetime)?;
         }
 
         write!(f, "{}", self.instr)?;
@@ -589,6 +589,51 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
     }
 }
 
+fn calculate_lifetimes(func: &mut IrFunction) {
+    let mut func_iter = func.blocks.iter_mut();
+    while let Some(block) = func_iter.next() {
+        let mut iter = block.ssas.iter_mut();
+        let mut i = 0;
+        while let Some(ssa) = iter.next() {
+            if ssa.local.is_none() {
+                continue;
+            }
+            let local = ssa.local.unwrap();
+
+            let mut j = i + 1;
+            for next in iter.as_slice() {
+                for arg in next.args.iter() {
+                    if let IrArgument::Local(l) = arg {
+                        if *l == local {
+                            ssa.local_lifetime = j - i;
+                            break;
+                        }
+                    }
+                }
+
+                j += 1;
+            }
+            if block.terminator.args.contains(&IrArgument::Local(local)) {
+                ssa.local_lifetime = j - i;
+            }
+            j += 1;
+
+            for next_block in func_iter.as_slice() {
+                if let Some(next_block_ssa) = next_block.ssas.first() {
+                    if matches!(next_block_ssa.instr, IrInstruction::Phi) && next_block_ssa.args.contains(&IrArgument::Local(local)) {
+                        ssa.local_lifetime = j - i;
+                        break;
+                    }
+                }
+
+                j += next_block.ssas.len() + 1;
+            }
+
+            i += 1;
+        }
+    }
+}
+
 pub fn ast_to_ir(ast: Ast) -> Result<IrModule, IrError> {
     let mut module = IrModule {
         funcs: vec![],
@@ -640,6 +685,10 @@ pub fn ast_to_ir(ast: Ast) -> Result<IrModule, IrError> {
 
     func.blocks.push(block);
     module.funcs.push(func);
+
+    for func in module.funcs.iter_mut() {
+        calculate_lifetimes(func);
+    }
 
     Ok(module)
 }
