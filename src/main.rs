@@ -3,10 +3,18 @@ use lil_owo_bootstrap::ir;
 
 fn main() {
     let parse = "
-    (func test (x)
-        (func testy (y)
-            (func uwu (z)
-                (+ x y z))))
+    ; this is a comment
+    ; this is another comment
+    begin; this is comment too
+        (func factorial (n)
+            (begin
+                ((func factorial-tail (n acc) 
+                    (cond ((<= n 1) n)
+                        (else (factorial-tail (- n 1) (* acc n)))))
+                    (factorial-tail n 1))
+            end))
+        (factorial 10)
+    end
     ";
     println!("{}", parse);
     let ast = parser::parse("stdin", parse).unwrap();

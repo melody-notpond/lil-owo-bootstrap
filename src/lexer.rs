@@ -64,7 +64,15 @@ impl<'a> Iterator for Lexer<'a> {
         } else {
             let mut start = self.state.s_index;
             let mut end = self.s.len();
+            let mut in_comment = false;
             for (i, b) in self.s.bytes().enumerate().skip(start) {
+                if in_comment {
+                    if b == b'\n' {
+                        in_comment = false;
+                        start = i + 1;
+                    }
+                    continue;
+                }
                 if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
                     if i == start {
                         start = i + 1;
@@ -75,6 +83,13 @@ impl<'a> Iterator for Lexer<'a> {
                 } else if b == b'(' || b == b')' || b == b'[' || b == b']' {
                     end = i + if i == start { 1 } else { 0 };
                     break;
+                } else if b == b';' {
+                    if i == start {
+                        in_comment = true;
+                    } else {
+                        end = i;
+                        break;
+                    }
                 }
             }
 

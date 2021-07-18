@@ -125,7 +125,7 @@ impl Display for IrBasicBlock {
         for ssa in self.ssas.iter() {
             writeln!(f, "    {}", ssa)?;
         }
-        writeln!(f, "    {}", self.terminator)
+        write!(f, "    {}", self.terminator)
     }
 }
 
@@ -143,7 +143,7 @@ impl Display for IrFunction {
         for block in self.blocks.iter() {
             writeln!(f, "{}\n", block)?;
         }
-        Ok(())
+        writeln!(f)
     }
 }
 
