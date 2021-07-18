@@ -12,6 +12,15 @@ fn main() {
                     (factorial-tail n 1)
             end))
         (factorial 10)
+        (func loop (x) (loop x))
+        (func not-tail (x) 
+            (begin
+                (cond ((not-tail x) (not-tail x)))
+            end))
+
+        (func fact (n)
+            (cond ((<= n 1) n)
+                (else (* n (fact (- n 1))))))
     end
     ";
     println!("{}", parse);
