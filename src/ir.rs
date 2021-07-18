@@ -589,6 +589,124 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
     }
 }
 
+fn is_not_not_tail_recursive(func: &IrFunction, block: &IrBasicBlock) -> bool {
+    let name = IrArgument::Function(func.name.clone());
+    let mut block_iter = func.blocks.iter();
+    while let Some(block) = block_iter.next() {
+        let mut ssa_iter = block.ssas.iter();
+        while let Some(ssa) = ssa_iter.next() {
+            if matches!(ssa.instr, IrInstruction::Call) && *ssa.args.first().unwrap() == name {
+                for arg in ssa.args.iter().skip(1) {
+                    if *arg == name {
+                        return false;
+                    }
+                }
+
+                if ssa.local.is_none() {
+                    return false;
+                }
+
+                let mut local = IrArgument::Local(ssa.local.unwrap());
+                let mut i = ssa.local_lifetime;
+                for ssa in ssa_iter.as_slice() {
+                    for arg in ssa.args.iter() {
+                        if i == 0 {
+                            if ssa.local.is_none() {
+                                return false;
+                            }
+                            local = IrArgument::Local(ssa.local.unwrap());
+                            i = ssa.local_lifetime;
+                        }
+                        if *arg == local {
+                            return false;
+                        }
+                        i -= 1;
+                    }
+                }
+
+                if block.terminator.args[0] == local {
+                    return i == 0 && matches!(block.terminator.instr, IrInstruction::Ret);
+                }
+
+                for block in block_iter.as_slice() {
+                    for ssa in block.ssas.iter() {
+                        for arg in ssa.args.iter() {
+                            if i == 0 {
+                                if ssa.local.is_none() {
+                                    return false;
+                                }
+                                local = IrArgument::Local(ssa.local.unwrap());
+                                i = ssa.local_lifetime;
+                            }
+                            if *arg == local {
+                                return false;
+                            }
+                            i -= 1;
+                        }
+                    }
+
+                    if block.terminator.args[0] == local {
+                        return i == 0 && matches!(block.terminator.instr, IrInstruction::Ret);
+                    }
+                }
+            } else {
+                for arg in ssa.args.iter() {
+                    if *arg == name {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    match block.terminator.instr {
+        IrInstruction::Ret => true,
+        IrInstruction::Jump => is_not_not_tail_recursive(func, &func.blocks[if let IrArgument::BasicBlock(b) = block.terminator.args[0] { b } else { unreachable!() }]),
+        IrInstruction::Branch =>
+            is_not_not_tail_recursive(func, &func.blocks[if let IrArgument::BasicBlock(b) = block.terminator.args[1] { b } else { unreachable!() }])
+         && is_not_not_tail_recursive(func, &func.blocks[if let IrArgument::BasicBlock(b) = block.terminator.args[2] { b } else { unreachable!() }]),
+        _ => unreachable!("invalid instruction for terminator")
+    }
+}
+
+fn self_references(func: &IrFunction) -> bool {
+    let name = IrArgument::Function(func.name.clone());
+    for block in func.blocks.iter() {
+        for ssa in block.ssas.iter() {
+            if matches!(ssa.instr, IrInstruction::Call) && *ssa.args.first().unwrap() == name {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn is_tail_recursive(func: &IrFunction) -> bool {
+    self_references(func) && is_not_not_tail_recursive(func, &func.blocks[0])
+
+}
+
+fn remove_unused(func: &mut IrFunction) {
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in func.blocks.iter_mut() {
+            let mut to_remove = vec![];
+            for (i, ssa) in block.ssas.iter_mut().enumerate() {
+                if ssa.local.is_some() && ssa.local_lifetime == 0 {
+                    to_remove.push(i);
+                    changed = true;
+                }
+            }
+
+            for (i, removed) in to_remove.into_iter().enumerate() {
+                block.ssas.remove(removed - i);
+            }
+        }
+    }
+}
+
 fn calculate_lifetimes(func: &mut IrFunction) {
     let mut func_iter = func.blocks.iter_mut();
     while let Some(block) = func_iter.next() {
@@ -688,6 +806,13 @@ pub fn ast_to_ir(ast: Ast) -> Result<IrModule, IrError> {
 
     for func in module.funcs.iter_mut() {
         calculate_lifetimes(func);
+        remove_unused(func);
+        calculate_lifetimes(func);
+
+        println!("{}: {}", func.name, is_tail_recursive(func));
+        if is_tail_recursive(func) {
+            // TODO
+        }
     }
 
     Ok(module)

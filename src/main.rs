@@ -6,10 +6,10 @@ fn main() {
     begin
         (func factorial (n)
             (begin
-                ((func factorial-tail (n acc) 
+                (func factorial-tail (n acc) 
                     (cond ((<= n 1) n)
                         (else (factorial-tail (- n 1) (* acc n)))))
-                    (factorial-tail n 1))
+                    (factorial-tail n 1)
             end))
         (factorial 10)
     end
