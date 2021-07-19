@@ -1,11 +1,13 @@
 use std::fs::File;
 
 use faerie::{ArtifactBuilder, Decl, Link};
-use target_lexicon::{Architecture, BinaryFormat, Environment, OperatingSystem, Riscv64Architecture, Triple, Vendor};
+use target_lexicon::{
+    Architecture, BinaryFormat, Environment, OperatingSystem, Riscv64Architecture, Triple, Vendor,
+};
 
-use lil_owo_bootstrap::parser;
-use lil_owo_bootstrap::ir;
 use lil_owo_bootstrap::codegen::riscv;
+use lil_owo_bootstrap::ir;
+use lil_owo_bootstrap::parser;
 
 fn main() {
     let parse = "
@@ -22,7 +24,9 @@ fn main() {
         operating_system: OperatingSystem::Unknown,
         environment: Environment::Unknown,
         binary_format: BinaryFormat::Elf,
-    }).name(String::from("uwu")).finish();
+    })
+    .name(String::from("uwu"))
+    .finish();
 
     let mut funcs: Vec<_> = code.get_addrs().iter().collect();
     funcs.sort_by(|a, b| a.1.start.cmp(&b.1.start));

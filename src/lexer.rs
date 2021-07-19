@@ -6,20 +6,20 @@ pub enum Token<'a> {
     LBrack,
     RBrack,
     Symbol(&'a str),
-    Number(f64)
+    Number(f64),
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct TokenValue<'a> {
     pub value: Token<'a>,
     pub start: usize,
-    pub end: usize
+    pub end: usize,
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct LexerState {
     token_pos: usize,
-    s_index: usize
+    s_index: usize,
 }
 
 #[derive(Debug)]
@@ -38,8 +38,8 @@ impl<'a> Lexer<'a> {
             tokens: vec![],
             state: LexerState {
                 s_index: 0,
-                token_pos: 0
-            }
+                token_pos: 0,
+            },
         }
     }
 
@@ -99,12 +99,14 @@ impl<'a> Iterator for Lexer<'a> {
                     if let Ok(v) = self.s[start..end].parse() {
                         Some(TokenValue {
                             value: Token::Number(v),
-                            start, end
+                            start,
+                            end,
                         })
                     } else {
                         Some(TokenValue {
                             value: Token::Err,
-                            start, end
+                            start,
+                            end,
                         })
                     }
                 } else if end - start == 1 {
@@ -114,14 +116,16 @@ impl<'a> Iterator for Lexer<'a> {
                             b')' => Token::RParen,
                             b'[' => Token::LBrack,
                             b']' => Token::RBrack,
-                            _ => Token::Symbol(&self.s[start..end])
+                            _ => Token::Symbol(&self.s[start..end]),
                         },
-                        start, end
+                        start,
+                        end,
                     })
                 } else {
                     Some(TokenValue {
                         value: Token::Symbol(&self.s[start..end]),
-                        start, end
+                        start,
+                        end,
                     })
                 }
             } else {
@@ -138,4 +142,3 @@ impl<'a> Iterator for Lexer<'a> {
         }
     }
 }
-

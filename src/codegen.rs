@@ -58,6 +58,9 @@ pub(crate) fn linear_scan(func: &mut IrFunction, register_count: usize) {
             }
         }
 
-        saved = register_lifetimes.into_iter().filter(|v| v.1 && v.0 != 0).collect();
+        saved = register_lifetimes
+            .into_iter()
+            .filter(|v| v.1 && v.0 != 0)
+            .collect();
     }
 }

@@ -5,7 +5,7 @@ pub enum Ast<'a> {
     Number(f64),
     Symbol(&'a str),
     SExpr(Box<Ast<'a>>, Vec<Ast<'a>>),
-    List(Vec<Ast<'a>>)
+    List(Vec<Ast<'a>>),
 }
 
 #[derive(Debug)]
@@ -15,9 +15,13 @@ fn parse_value<'a>(lexer: &mut Lexer<'a>) -> Result<Ast<'a>, ParseError> {
     let state = lexer.push_state();
 
     let token = match lexer.next() {
-        Some(TokenValue { value: Token::Err, start: _, end: _ }) => return Err(ParseError),
+        Some(TokenValue {
+            value: Token::Err,
+            start: _,
+            end: _,
+        }) => return Err(ParseError),
         Some(v) => v,
-        None => return Err(ParseError)
+        None => return Err(ParseError),
     };
 
     match token.value {
@@ -35,7 +39,12 @@ fn parse_value<'a>(lexer: &mut Lexer<'a>) -> Result<Ast<'a>, ParseError> {
                 }
             };
 
-            if let Some(TokenValue { value: Token::RParen, start: _, end: _ }) = lexer.next() {
+            if let Some(TokenValue {
+                value: Token::RParen,
+                start: _,
+                end: _,
+            }) = lexer.next()
+            {
                 Ok(sexpr)
             } else {
                 lexer.pop_state(state);
@@ -54,7 +63,12 @@ fn parse_value<'a>(lexer: &mut Lexer<'a>) -> Result<Ast<'a>, ParseError> {
                 asts.push(ast);
             }
 
-            if let Some(TokenValue { value: Token::RBrack, start: _, end: _ }) = lexer.next() {
+            if let Some(TokenValue {
+                value: Token::RBrack,
+                start: _,
+                end: _,
+            }) = lexer.next()
+            {
                 Ok(Ast::List(asts))
             } else {
                 lexer.pop_state(state);

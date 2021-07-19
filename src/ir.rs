@@ -74,7 +74,7 @@ pub enum IrArgument {
     Atom(String),
     Function(String),
     BasicBlock(usize),
-    Closed(usize)
+    Closed(usize),
 }
 
 impl Display for IrArgument {
@@ -103,7 +103,13 @@ pub struct IrSsa {
 impl Display for IrSsa {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(l) = self.local {
-            write!(f, "%{}[{}{}] = ", l, self.local_lifetime, if self.global { "+" } else { "" })?;
+            write!(
+                f,
+                "%{}[{}{}] = ",
+                l,
+                self.local_lifetime,
+                if self.global { "+" } else { "" }
+            )?;
         }
 
         write!(f, "{}", self.instr)?;
@@ -135,7 +141,7 @@ pub struct IrFunction {
     pub argc: usize,
     pub captured: Vec<String>,
     pub blocks: Vec<IrBasicBlock>,
-    pub last_local: usize
+    pub last_local: usize,
 }
 
 impl Display for IrFunction {
@@ -149,7 +155,7 @@ impl Display for IrFunction {
 }
 
 pub struct IrModule {
-    pub funcs: Vec<IrFunction>
+    pub funcs: Vec<IrFunction>,
 }
 
 impl Display for IrModule {
@@ -173,7 +179,7 @@ pub enum IrError {
     AssignmentWithoutValue,
     NonSExprInCond,
     NoConditionInCond,
-    NoBodyForCond
+    NoBodyForCond,
 }
 
 type IrScope = Vec<HashMap<String, IrArgument>>;
@@ -192,7 +198,13 @@ mod scope {
     }
 }
 
-fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule, func: &mut IrFunction, block: &mut IrBasicBlock) -> Result<Option<usize>, IrError> {
+fn ast_to_ir_helper<'a>(
+    ast: Ast<'a>,
+    scope: &mut IrScope,
+    module: &mut IrModule,
+    func: &mut IrFunction,
+    block: &mut IrBasicBlock,
+) -> Result<Option<usize>, IrError> {
     match ast {
         Ast::Number(float) => {
             let local = Some(func.last_local);
@@ -213,11 +225,14 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
         Ast::Symbol(sym) => {
             let (mut value, closed) = match scope::get(scope, sym) {
                 Some(v) => v,
-                None => return Err(IrError::UnknownSymbol)
+                None => return Err(IrError::UnknownSymbol),
             };
             if closed && !matches!(value, IrArgument::Atom(_) | IrArgument::Function(_)) {
                 value = IrArgument::Closed(func.captured.len());
-                scope.last_mut().unwrap().insert(String::from(sym), value.clone());
+                scope
+                    .last_mut()
+                    .unwrap()
+                    .insert(String::from(sym), value.clone());
                 func.captured.push(String::from(sym));
             }
 
@@ -246,7 +261,10 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                     let (mut value, closed) = scope::get(scope, v).unwrap();
                     if closed && !matches!(value, IrArgument::Atom(_) | IrArgument::Function(_)) {
                         value = IrArgument::Closed(func.captured.len());
-                        scope.last_mut().unwrap().insert(String::from(v), value.clone());
+                        scope
+                            .last_mut()
+                            .unwrap()
+                            .insert(String::from(v), value.clone());
                         func.captured.push(String::from(v));
                     }
 
@@ -302,23 +320,26 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                     let mut args = args.into_iter();
                     let name = match args.next() {
                         Some(Ast::Symbol(v)) => v,
-                        _ => return Err(IrError::FuncNameNotFound)
+                        _ => return Err(IrError::FuncNameNotFound),
                     };
 
-                    scope.last_mut().unwrap().insert(String::from(name), IrArgument::Function(String::from(name)));
+                    scope
+                        .last_mut()
+                        .unwrap()
+                        .insert(String::from(name), IrArgument::Function(String::from(name)));
 
                     scope.push(HashMap::new());
                     let formals: Vec<_> = match args.next() {
-                        Some(Ast::SExpr(head, tail)) => {
-                            vec![*head].into_iter().chain(tail.into_iter()).filter_map(
-                                |v| match v {
-                                    Ast::Symbol(v) => Some(v),
-                                    _ => None
-                                }
-                            ).collect()
-                        }
+                        Some(Ast::SExpr(head, tail)) => vec![*head]
+                            .into_iter()
+                            .chain(tail.into_iter())
+                            .filter_map(|v| match v {
+                                Ast::Symbol(v) => Some(v),
+                                _ => None,
+                            })
+                            .collect(),
 
-                        _ => return Err(IrError::FuncArgsNotFound)
+                        _ => return Err(IrError::FuncArgsNotFound),
                     };
 
                     let last_scope = scope.last_mut().unwrap();
@@ -346,10 +367,16 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                         },
                     };
 
-                    let ret = ast_to_ir_helper(match args.next() {
-                        Some(v) => v,
-                        None => return Err(IrError::FuncBodyNotFound)
-                    }, scope, module, &mut f, &mut b)?;
+                    let ret = ast_to_ir_helper(
+                        match args.next() {
+                            Some(v) => v,
+                            None => return Err(IrError::FuncBodyNotFound),
+                        },
+                        scope,
+                        module,
+                        &mut f,
+                        &mut b,
+                    )?;
                     if let Some(ret) = ret {
                         b.terminator.args.push(IrArgument::Local(ret));
                     }
@@ -363,9 +390,14 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                         let mut args = vec![IrArgument::Function(String::from(name))];
                         for captured in f.captured.iter() {
                             let (mut value, closed) = scope::get(scope, captured).unwrap();
-                            if closed && !matches!(value, IrArgument::Atom(_) | IrArgument::Function(_)) {
+                            if closed
+                                && !matches!(value, IrArgument::Atom(_) | IrArgument::Function(_))
+                            {
                                 value = IrArgument::Closed(func.captured.len());
-                                scope.last_mut().unwrap().insert(captured.clone(), value.clone());
+                                scope
+                                    .last_mut()
+                                    .unwrap()
+                                    .insert(captured.clone(), value.clone());
                                 func.captured.push(captured.clone());
                             }
 
@@ -400,12 +432,12 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                     let mut args = args.into_iter();
                     let name = match args.next() {
                         Some(Ast::Symbol(v)) => v,
-                        _ => return Err(IrError::NonSymbolInAssignment)
+                        _ => return Err(IrError::NonSymbolInAssignment),
                     };
 
                     let value = match args.next() {
                         Some(v) => ast_to_ir_helper(v, scope, module, func, block)?,
-                        None => return Err(IrError::AssignmentWithoutValue)
+                        None => return Err(IrError::AssignmentWithoutValue),
                     };
                     if value.is_none() {
                         return Err(IrError::AssignmentWithoutValue);
@@ -439,10 +471,16 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                         match arg {
                             Ast::SExpr(cond, value) => {
                                 if let Ast::Symbol("else") = *cond {
-                                    let value = ast_to_ir_helper(match value.into_iter().next() {
-                                        Some(v) => v,
-                                        None => return Err(IrError::NoBodyForCond)
-                                    }, scope, module, func, block)?;
+                                    let value = ast_to_ir_helper(
+                                        match value.into_iter().next() {
+                                            Some(v) => v,
+                                            None => return Err(IrError::NoBodyForCond),
+                                        },
+                                        scope,
+                                        module,
+                                        func,
+                                        block,
+                                    )?;
 
                                     basic_block_pairs.push((func.blocks.len(), value));
 
@@ -455,7 +493,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                                             local_register: 0,
                                             global: false,
                                             instr: IrInstruction::Ret,
-                                            args: vec![]
+                                            args: vec![],
                                         },
                                     };
                                     block.terminator.instr = IrInstruction::Jump;
@@ -463,7 +501,9 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                                     func.blocks.push(temp);
                                     break;
                                 } else {
-                                    let cond = match ast_to_ir_helper(*cond, scope, module, func, block)? {
+                                    let cond = match ast_to_ir_helper(
+                                        *cond, scope, module, func, block,
+                                    )? {
                                         Some(v) => v,
                                         None => return Err(IrError::NoConditionInCond),
                                     };
@@ -475,7 +515,10 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                                         local_register: 0,
                                         global: false,
                                         instr: IrInstruction::Branch,
-                                        args: vec![IrArgument::Local(cond), IrArgument::BasicBlock(func.blocks.len() + 1)],
+                                        args: vec![
+                                            IrArgument::Local(cond),
+                                            IrArgument::BasicBlock(func.blocks.len() + 1),
+                                        ],
                                     };
                                     let mut temp = IrBasicBlock {
                                         id: func.blocks.len() + 1,
@@ -486,18 +529,27 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                                             local_register: 0,
                                             global: false,
                                             instr: IrInstruction::Ret,
-                                            args: vec![]
+                                            args: vec![],
                                         },
                                     };
                                     std::mem::swap(&mut temp, block);
 
                                     func.blocks.push(temp);
-                                    let value = ast_to_ir_helper(match value.into_iter().next() {
-                                        Some(v) => v,
-                                        None => return Err(IrError::NoBodyForCond)
-                                    }, scope, module, func, block)?;
+                                    let value = ast_to_ir_helper(
+                                        match value.into_iter().next() {
+                                            Some(v) => v,
+                                            None => return Err(IrError::NoBodyForCond),
+                                        },
+                                        scope,
+                                        module,
+                                        func,
+                                        block,
+                                    )?;
                                     let len = func.blocks.len();
-                                    func.blocks[block_id].terminator.args.push(IrArgument::BasicBlock(len + 1));
+                                    func.blocks[block_id]
+                                        .terminator
+                                        .args
+                                        .push(IrArgument::BasicBlock(len + 1));
                                     basic_block_pairs.push((len, value));
 
                                     block.terminator.instr = IrInstruction::Jump;
@@ -510,7 +562,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                                             local_register: 0,
                                             global: false,
                                             instr: IrInstruction::Ret,
-                                            args: vec![]
+                                            args: vec![],
                                         },
                                     };
                                     std::mem::swap(&mut temp, block);
@@ -518,7 +570,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                                 }
                             }
 
-                            _ => return Err(IrError::NonSExprInCond)
+                            _ => return Err(IrError::NonSExprInCond),
                         }
                     }
 
@@ -531,11 +583,14 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                         local_register: 0,
                         global: false,
                         instr: IrInstruction::Phi,
-                        args: vec![]
+                        args: vec![],
                     };
                     let block_id = func.blocks.len();
                     for (block, value) in basic_block_pairs {
-                        func.blocks[block].terminator.args.push(IrArgument::BasicBlock(block_id));
+                        func.blocks[block]
+                            .terminator
+                            .args
+                            .push(IrArgument::BasicBlock(block_id));
 
                         phi.args.push(IrArgument::BasicBlock(block));
                         if let Some(value) = value {
@@ -552,7 +607,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                 _ => {
                     let f = match ast_to_ir_helper(*f, scope, module, func, block)? {
                         Some(f) => IrArgument::Local(f),
-                        None => return Err(IrError::CallerNotFound)
+                        None => return Err(IrError::CallerNotFound),
                     };
 
                     let mut locals = vec![f];
@@ -582,7 +637,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
         Ast::List(elements) => {
             let mut args = vec![];
             for e in elements {
-                if let Some(v) =  ast_to_ir_helper(e, scope, module, func, block)? {
+                if let Some(v) = ast_to_ir_helper(e, scope, module, func, block)? {
                     args.push(IrArgument::Local(v));
                 }
             }
@@ -596,7 +651,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                 local_register: 0,
                 global: false,
                 instr: IrInstruction::List,
-                args
+                args,
             });
 
             Ok(local)
@@ -676,11 +731,32 @@ fn is_not_not_tail_recursive(func: &IrFunction, block: &IrBasicBlock) -> bool {
 
     match block.terminator.instr {
         IrInstruction::Ret => true,
-        IrInstruction::Jump => is_not_not_tail_recursive(func, &func.blocks[if let IrArgument::BasicBlock(b) = block.terminator.args[0] { b } else { unreachable!() }]),
-        IrInstruction::Branch =>
-            is_not_not_tail_recursive(func, &func.blocks[if let IrArgument::BasicBlock(b) = block.terminator.args[1] { b } else { unreachable!() }])
-         && is_not_not_tail_recursive(func, &func.blocks[if let IrArgument::BasicBlock(b) = block.terminator.args[2] { b } else { unreachable!() }]),
-        _ => unreachable!("invalid instruction for terminator")
+        IrInstruction::Jump => is_not_not_tail_recursive(
+            func,
+            &func.blocks[if let IrArgument::BasicBlock(b) = block.terminator.args[0] {
+                b
+            } else {
+                unreachable!()
+            }],
+        ),
+        IrInstruction::Branch => {
+            is_not_not_tail_recursive(
+                func,
+                &func.blocks[if let IrArgument::BasicBlock(b) = block.terminator.args[1] {
+                    b
+                } else {
+                    unreachable!()
+                }],
+            ) && is_not_not_tail_recursive(
+                func,
+                &func.blocks[if let IrArgument::BasicBlock(b) = block.terminator.args[2] {
+                    b
+                } else {
+                    unreachable!()
+                }],
+            )
+        }
+        _ => unreachable!("invalid instruction for terminator"),
     }
 }
 
@@ -766,11 +842,14 @@ fn calculate_lifetimes(func: &mut IrFunction) {
                     j += 1;
                 }
 
-                if next_block.terminator.args.contains(&IrArgument::Local(local)) {
+                if next_block
+                    .terminator
+                    .args
+                    .contains(&IrArgument::Local(local))
+                {
                     ssa.local_lifetime = j - i;
                 }
                 j += 1;
-
             }
 
             i += 1;
@@ -786,7 +865,9 @@ fn inliner(func: &mut IrFunction) {
             let mut locals_to_inlined = HashMap::new();
 
             for ssa in block.ssas.iter_mut() {
-                if matches!(ssa.instr, IrInstruction::Load | IrInstruction::Literal) && ssa.local.is_some() {
+                if matches!(ssa.instr, IrInstruction::Load | IrInstruction::Literal)
+                    && ssa.local.is_some()
+                {
                     locals_to_inlined.insert(ssa.local.unwrap(), ssa.args[0].clone());
                 } else if matches!(ssa.instr, IrInstruction::Phi) {
                     continue;
@@ -830,15 +911,13 @@ fn unneeded_set_remover(func: &mut IrFunction) {
 }
 
 pub fn ast_to_ir(ast: Ast) -> Result<IrModule, IrError> {
-    let mut module = IrModule {
-        funcs: vec![],
-    };
+    let mut module = IrModule { funcs: vec![] };
     let mut func = IrFunction {
         name: String::from(".main"),
         argc: 0,
         captured: vec![],
         blocks: vec![],
-        last_local: 0
+        last_local: 0,
     };
     let mut block = IrBasicBlock {
         id: 0,
@@ -854,25 +933,28 @@ pub fn ast_to_ir(ast: Ast) -> Result<IrModule, IrError> {
     };
 
     let mut scope = vec![vec![
-        ("+",  IrArgument::Function(String::from("+"))),
-        ("-",  IrArgument::Function(String::from("-"))),
-        ("*",  IrArgument::Function(String::from("*"))),
-        ("/",  IrArgument::Function(String::from("/"))),
+        ("+", IrArgument::Function(String::from("+"))),
+        ("-", IrArgument::Function(String::from("-"))),
+        ("*", IrArgument::Function(String::from("*"))),
+        ("/", IrArgument::Function(String::from("/"))),
         ("//", IrArgument::Function(String::from("//"))),
-        ("%",  IrArgument::Function(String::from("%"))),
-        ("<",  IrArgument::Function(String::from("<"))),
-        (">",  IrArgument::Function(String::from(">"))),
+        ("%", IrArgument::Function(String::from("%"))),
+        ("<", IrArgument::Function(String::from("<"))),
+        (">", IrArgument::Function(String::from(">"))),
         ("<=", IrArgument::Function(String::from("<="))),
         (">=", IrArgument::Function(String::from(">="))),
-        ("&",  IrArgument::Function(String::from("&"))),
-        ("|",  IrArgument::Function(String::from("|"))),
-        ("^",  IrArgument::Function(String::from("^"))),
+        ("&", IrArgument::Function(String::from("&"))),
+        ("|", IrArgument::Function(String::from("|"))),
+        ("^", IrArgument::Function(String::from("^"))),
         (">>", IrArgument::Function(String::from(">>"))),
         ("<<", IrArgument::Function(String::from("<<"))),
         ("nil", IrArgument::Atom(String::from("nil"))),
         ("true", IrArgument::Atom(String::from("true"))),
         ("false", IrArgument::Atom(String::from("false"))),
-    ].into_iter().map(|v| (String::from(v.0), v.1)).collect()];
+    ]
+    .into_iter()
+    .map(|v| (String::from(v.0), v.1))
+    .collect()];
 
     let ret = ast_to_ir_helper(ast, &mut scope, &mut module, &mut func, &mut block)?;
     if let Some(ret) = ret {
@@ -922,7 +1004,6 @@ pub fn ast_to_ir(ast: Ast) -> Result<IrModule, IrError> {
                     };
                 }
             }
-
         }
         inliner(func);
         unneeded_set_remover(func);

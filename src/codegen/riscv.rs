@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::super::ir::{IrArgument, IrInstruction, IrModule};
-use super::{GeneratedCode, linear_scan};
+use super::{linear_scan, GeneratedCode};
 
 const ARG_REGISTER_COUNT: usize = 8;
 const NONARG_REGISTER_COUNT: usize = 17;
@@ -54,7 +54,7 @@ enum Register {
     S10,
 
     // Temporary register for calculations
-    S11, 
+    S11,
 
     // Temporaries (locals)
     T3,
@@ -66,13 +66,16 @@ enum Register {
     Spilled(usize),
 
     // Spilled arguments
-    Arg(usize)
+    Arg(usize),
 }
 
 impl Register {
     fn is_callee_saved(&self) -> bool {
         use Register::*;
-        matches!(self, Sp | Fp | S1 | S2 | S3 | S4 | S5 | S6 | S7 | S8 | S9 | S10 | S11)
+        matches!(
+            self,
+            Sp | Fp | S1 | S2 | S3 | S4 | S5 | S6 | S7 | S8 | S9 | S10 | S11
+        )
     }
 
     fn is_register(&self) -> bool {
@@ -91,7 +94,7 @@ impl Register {
             5 => A5,
             6 => A6,
             7 => A7,
-            _ => Arg(id - ARG_REGISTER_COUNT)
+            _ => Arg(id - ARG_REGISTER_COUNT),
         }
     }
 
@@ -115,7 +118,7 @@ impl Register {
             14 => S8,
             15 => S9,
             16 => S10,
-            _ => Spilled(id - NONARG_REGISTER_COUNT)
+            _ => Spilled(id - NONARG_REGISTER_COUNT),
         }
     }
 
@@ -156,19 +159,23 @@ impl Register {
             T6 => 31,
 
             Spilled(_) => panic!("Spilled values are not registers!"),
-            Arg(_) => panic!("Arguments on the stack are not registers!")
+            Arg(_) => panic!("Arguments on the stack are not registers!"),
         }
     }
 }
 
 fn push_instr<T: std::hash::Hash + Eq + PartialEq>(code: &mut GeneratedCode<T>, instr: u32) {
-    code.data.push((instr         & 0xff) as u8);
-    code.data.push(((instr >>  8) & 0xff) as u8);
+    code.data.push((instr & 0xff) as u8);
+    code.data.push(((instr >> 8) & 0xff) as u8);
     code.data.push(((instr >> 16) & 0xff) as u8);
     code.data.push(((instr >> 24) & 0xff) as u8);
 }
 
-fn load_float<T: std::hash::Hash + Eq + PartialEq>(code: &mut GeneratedCode<T>, reg: Register, float: f64) {
+fn load_float<T: std::hash::Hash + Eq + PartialEq>(
+    code: &mut GeneratedCode<T>,
+    reg: Register,
+    float: f64,
+) {
     let mut as_bits = float.to_bits();
     let reg = reg.get_register();
 
@@ -209,7 +216,7 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<String> {
         let mut func_code = GeneratedCode {
             addrs: HashMap::new(),
             refs: HashMap::new(),
-            data: vec![]
+            data: vec![],
         };
 
         // addi sp, sp, 8
@@ -235,9 +242,9 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<String> {
                     IrInstruction::RcInc => todo!(),
                     IrInstruction::RcDec => todo!(),
                     IrInstruction::Phi => todo!(),
-                    IrInstruction::Ret
-                        | IrInstruction::Jump
-                        | IrInstruction::Branch => unreachable!()
+                    IrInstruction::Ret | IrInstruction::Jump | IrInstruction::Branch => {
+                        unreachable!()
+                    }
                 }
             }
 
