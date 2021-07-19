@@ -95,6 +95,7 @@ pub struct IrSsa {
     pub local: Option<usize>,
     pub local_lifetime: usize,
     pub local_register: usize,
+    pub global: bool,
     pub instr: IrInstruction,
     pub args: Vec<IrArgument>,
 }
@@ -102,7 +103,7 @@ pub struct IrSsa {
 impl Display for IrSsa {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(l) = self.local {
-            write!(f, "%{}[{}] = ", l, self.local_lifetime)?;
+            write!(f, "%{}[{}{}] = ", l, self.local_lifetime, if self.global { "+" } else { "" })?;
         }
 
         write!(f, "{}", self.instr)?;
@@ -201,6 +202,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                 local,
                 local_lifetime: 0,
                 local_register: 0,
+                global: false,
                 instr: IrInstruction::Literal,
                 args: vec![IrArgument::Literal(float)],
             });
@@ -226,6 +228,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                 local,
                 local_lifetime: 0,
                 local_register: 0,
+                global: false,
                 instr: IrInstruction::Load,
                 args: vec![value],
             });
@@ -261,6 +264,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                         local,
                         local_lifetime: 0,
                         local_register: 0,
+                        global: false,
                         instr: IrInstruction::Call,
                         args: locals,
                     });
@@ -336,6 +340,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                             local: None,
                             local_lifetime: 0,
                             local_register: 0,
+                            global: false,
                             instr: IrInstruction::Ret,
                             args: vec![],
                         },
@@ -371,6 +376,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                             local,
                             local_lifetime: 0,
                             local_register: 0,
+                            global: false,
                             instr: IrInstruction::Capture,
                             args,
                         });
@@ -379,6 +385,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                             local,
                             local_lifetime: 0,
                             local_register: 0,
+                            global: false,
                             instr: IrInstruction::Load,
                             args: vec![IrArgument::Function(String::from(name))],
                         });
@@ -416,6 +423,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                             local: Some(local),
                             local_lifetime: 0,
                             local_register: 0,
+                            global: false,
                             instr: IrInstruction::Set,
                             args: vec![scope.get(name).unwrap().clone(), IrArgument::Local(value)],
                         });
@@ -445,6 +453,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                                             local: None,
                                             local_lifetime: 0,
                                             local_register: 0,
+                                            global: false,
                                             instr: IrInstruction::Ret,
                                             args: vec![]
                                         },
@@ -464,6 +473,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                                         local: None,
                                         local_lifetime: 0,
                                         local_register: 0,
+                                        global: false,
                                         instr: IrInstruction::Branch,
                                         args: vec![IrArgument::Local(cond), IrArgument::BasicBlock(func.blocks.len() + 1)],
                                     };
@@ -474,6 +484,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                                             local: None,
                                             local_lifetime: 0,
                                             local_register: 0,
+                                            global: false,
                                             instr: IrInstruction::Ret,
                                             args: vec![]
                                         },
@@ -497,6 +508,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                                             local: None,
                                             local_lifetime: 0,
                                             local_register: 0,
+                                            global: false,
                                             instr: IrInstruction::Ret,
                                             args: vec![]
                                         },
@@ -517,6 +529,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                         local,
                         local_lifetime: 0,
                         local_register: 0,
+                        global: false,
                         instr: IrInstruction::Phi,
                         args: vec![]
                     };
@@ -556,6 +569,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                         local,
                         local_lifetime: 0,
                         local_register: 0,
+                        global: false,
                         instr: IrInstruction::Call,
                         args: locals,
                     });
@@ -580,6 +594,7 @@ fn ast_to_ir_helper<'a>(ast: Ast<'a>, scope: &mut IrScope, module: &mut IrModule
                 local,
                 local_lifetime: 0,
                 local_register: 0,
+                global: false,
                 instr: IrInstruction::List,
                 args
             });
@@ -738,14 +753,24 @@ fn calculate_lifetimes(func: &mut IrFunction) {
             j += 1;
 
             for next_block in func_iter.as_slice() {
-                if let Some(next_block_ssa) = next_block.ssas.first() {
-                    if matches!(next_block_ssa.instr, IrInstruction::Phi) && next_block_ssa.args.contains(&IrArgument::Local(local)) {
+                for next_block_ssa in next_block.ssas.iter() {
+                    if next_block_ssa.args.contains(&IrArgument::Local(local)) {
                         ssa.local_lifetime = j - i;
-                        break;
+                        if !matches!(next_block_ssa.instr, IrInstruction::Phi) {
+                            ssa.global = true;
+                        } else {
+                            break;
+                        }
                     }
+
+                    j += 1;
                 }
 
-                j += next_block.ssas.len() + 1;
+                if next_block.terminator.args.contains(&IrArgument::Local(local)) {
+                    ssa.local_lifetime = j - i;
+                }
+                j += 1;
+
             }
 
             i += 1;
@@ -822,6 +847,7 @@ pub fn ast_to_ir(ast: Ast) -> Result<IrModule, IrError> {
             local: None,
             local_lifetime: 0,
             local_register: 0,
+            global: false,
             instr: IrInstruction::Ret,
             args: vec![],
         },
@@ -872,6 +898,7 @@ pub fn ast_to_ir(ast: Ast) -> Result<IrModule, IrError> {
                                 local: None,
                                 local_lifetime: 0,
                                 local_register: 0,
+                                global: false,
                                 instr: IrInstruction::Set,
                                 args: vec![IrArgument::Argument(i), arg.clone()],
                             });
@@ -889,6 +916,7 @@ pub fn ast_to_ir(ast: Ast) -> Result<IrModule, IrError> {
                         local: None,
                         local_lifetime: 0,
                         local_register: 0,
+                        global: false,
                         instr: IrInstruction::Jump,
                         args: vec![IrArgument::BasicBlock(0)],
                     };
