@@ -180,21 +180,38 @@ fn load_float<T: std::hash::Hash + Eq + PartialEq>(
     let reg = reg.get_register();
 
     // lui reg, most significant 20 bits of float
-    let instr = 0x37u32 | (reg << 7) | ((as_bits & 0xfffff00000000000) >> 32) as u32;
+    let instr = 0x37 | (reg << 7) | ((as_bits & 0xfffff00000000000) >> 32) as u32;
     push_instr(code, instr);
     as_bits &= !0xfffff00000000000;
 
     // Do the remaining bits
     as_bits &= 0x00000fffffffffff;
     if as_bits != 0 {
-        todo!();
+        let bits = [(as_bits >> 33) & 0x7ff, (as_bits >> 22) & 0x7ff, (as_bits >> 11) & 0x7ff, as_bits & 0x7ff];
+
+        let mut bitshift_acc = 0;
+        for bits in bits {
+            bitshift_acc += 11;
+            if bits == 0 {
+                continue;
+            }
+
+            // slli reg, reg, bitshift_acc
+            let instr = 0x1013 | (reg << 7) | (reg << 15) | (bitshift_acc << 20);
+            push_instr(code, instr);
+            bitshift_acc = 0;
+
+            // ori reg, reg, bits
+            let instr = 0x6013 | (reg << 7) | (reg << 15) | ((bits as u32) << 20);
+            push_instr(code, instr);
+        }
     } else {
         // slli reg, reg, 31
-        let instr = 0x1013u32 | (reg << 7) | (reg << 15) | (31 << 20);
+        let instr = 0x1013 | (reg << 7) | (reg << 15) | (31 << 20);
         push_instr(code, instr);
 
         // slli reg, reg, 1
-        let instr = 0x1013u32 | (reg << 7) | (reg << 15) | (1 << 20);
+        let instr = 0x1013 | (reg << 7) | (reg << 15) | (1 << 20);
         push_instr(code, instr);
     }
 }
@@ -242,6 +259,7 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<String> {
                     IrInstruction::RcInc => todo!(),
                     IrInstruction::RcDec => todo!(),
                     IrInstruction::Phi => todo!(),
+
                     IrInstruction::Ret | IrInstruction::Jump | IrInstruction::Branch => {
                         unreachable!()
                     }

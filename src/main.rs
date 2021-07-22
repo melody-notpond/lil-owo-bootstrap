@@ -11,7 +11,7 @@ use lil_owo_bootstrap::parser;
 
 fn main() {
     let parse = "
-    2.5
+    3.141592653
     ";
     println!("{}", parse);
     let ast = parser::parse("stdin", parse).unwrap();
