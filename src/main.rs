@@ -11,11 +11,7 @@ use lil_owo_bootstrap::parser;
 
 fn main() {
     let parse = "
-    begin
-        (func f (a)
-            (a))
-        (f 2)
-    end
+    (func f (n) (n)) 2
     ";
     println!("{}", parse);
     let ast = parser::parse("stdin", parse).unwrap();
@@ -74,7 +70,7 @@ fn main() {
             if range.start <= *addr && *addr < range.end {
                 match artefact.link(Link {
                     from,
-                    to,
+                    to: &to.0,
                     at: (addr - range.start) as u64,
                 }) {
                     Ok(_) => (),

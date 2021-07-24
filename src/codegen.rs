@@ -6,22 +6,22 @@ use std::ops::Range;
 use super::ir::IrFunction;
 
 #[derive(Debug)]
-pub struct GeneratedCode<T: Eq + PartialEq + std::hash::Hash> {
-    addrs: HashMap<T, Range<usize>>,
-    refs: HashMap<usize, T>,
+pub struct GeneratedCode<T> {
+    addrs: HashMap<String, Range<usize>>,
+    refs: HashMap<usize, (String, T)>,
     data: Vec<u8>,
 }
 
-impl<T: Eq + PartialEq + std::hash::Hash> GeneratedCode<T> {
+impl<T> GeneratedCode<T> {
     pub fn data(&self) -> &Vec<u8> {
         &self.data
     }
 
-    pub fn get_addrs(&self) -> &HashMap<T, Range<usize>> {
+    pub fn get_addrs(&self) -> &HashMap<String, Range<usize>> {
         &self.addrs
     }
 
-    pub fn get_relocation_table(&self) -> &HashMap<usize, T> {
+    pub fn get_relocation_table(&self) -> &HashMap<usize, (String, T)> {
         &self.refs
     }
 }

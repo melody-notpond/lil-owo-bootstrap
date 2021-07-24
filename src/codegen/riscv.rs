@@ -6,6 +6,12 @@ use super::{linear_scan, GeneratedCode};
 const ARG_REGISTER_COUNT: usize = 8;
 const NONARG_REGISTER_COUNT: usize = 17;
 
+#[derive(Debug)]
+pub enum RiscVRelocations {
+    Lower12Bits,
+    Upper20Bits
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Register {
     // Zero
@@ -101,23 +107,23 @@ impl Register {
     fn convert_nonarg_register_id(id: usize) -> Register {
         use Register::*;
         match id {
-            0 => T0,
-            1 => T1,
-            2 => T2,
-            3 => T3,
-            4 => T4,
-            5 => T5,
-            6 => T6,
-            7 => S1,
-            8 => S2,
-            9 => S3,
-            10 => S4,
-            11 => S5,
-            12 => S6,
-            13 => S7,
-            14 => S8,
-            15 => S9,
-            16 => S10,
+            0 => S1,
+            1 => S2,
+            2 => S3,
+            3 => S4,
+            4 => S5,
+            5 => S6,
+            6 => S7,
+            7 => S8,
+            8 => S9,
+            9 => S10,
+            10 => T0,
+            11 => T1,
+            12 => T2,
+            13 => T3,
+            14 => T4,
+            15 => T5,
+            16 => T6,
             _ => Spilled(id - NONARG_REGISTER_COUNT),
         }
     }
@@ -164,14 +170,14 @@ impl Register {
     }
 }
 
-fn push_instr<T: std::hash::Hash + Eq + PartialEq>(code: &mut GeneratedCode<T>, instr: u32) {
+fn push_instr<T>(code: &mut GeneratedCode<T>, instr: u32) {
     code.data.push((instr & 0xff) as u8);
     code.data.push(((instr >> 8) & 0xff) as u8);
     code.data.push(((instr >> 16) & 0xff) as u8);
     code.data.push(((instr >> 24) & 0xff) as u8);
 }
 
-fn load_float<T: std::hash::Hash + Eq + PartialEq>(
+fn load_float<T>(
     code: &mut GeneratedCode<T>,
     reg: Register,
     float: f64,
@@ -189,7 +195,12 @@ fn load_float<T: std::hash::Hash + Eq + PartialEq>(
         // Do the remaining bits
         as_bits &= 0x00000fffffffffff;
         if as_bits != 0 {
-            let bits = [(as_bits >> 33) & 0x7ff, (as_bits >> 22) & 0x7ff, (as_bits >> 11) & 0x7ff, as_bits & 0x7ff];
+            let bits = [
+                (as_bits >> 33) & 0x7ff,
+                (as_bits >> 22) & 0x7ff,
+                (as_bits >> 11) & 0x7ff,
+                as_bits & 0x7ff,
+            ];
 
             let mut bitshift_acc = 0;
             for bits in bits {
@@ -222,7 +233,11 @@ fn load_float<T: std::hash::Hash + Eq + PartialEq>(
     }
 }
 
-fn generate_mov<T: Eq + PartialEq + std::hash::Hash>(code: &mut GeneratedCode<T>, dest: Register, source: Register) {
+fn generate_mov<T>(
+    code: &mut GeneratedCode<T>,
+    dest: Register,
+    source: Register,
+) {
     match (dest.is_register(), source.is_register()) {
         (true, true) => {
             let instr = 0x0013 | (dest.get_register() << 7) | (source.get_register() << 15);
@@ -239,7 +254,7 @@ fn generate_mov<T: Eq + PartialEq + std::hash::Hash>(code: &mut GeneratedCode<T>
     }
 }
 
-pub fn generate_code(root: &mut IrModule) -> GeneratedCode<String> {
+pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
     let mut code = GeneratedCode {
         addrs: HashMap::new(),
         refs: HashMap::new(),
@@ -253,20 +268,17 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<String> {
     for func in root.funcs.iter() {
         code.addrs.insert(func.name.clone(), code.data.len()..0);
 
-        let mut func_code = GeneratedCode {
-            addrs: HashMap::new(),
-            refs: HashMap::new(),
-            data: vec![],
-        };
+        // addi sp, sp, -16
+        push_instr(&mut code, 0xff010113);
 
-        // addi sp, sp, 8
-        push_instr(&mut func_code, 0x00810113);
+        // sd ra, 8(sp)
+        push_instr(&mut code, 0x00113423);
 
         // sd fp, 0(sp)
-        push_instr(&mut func_code, 0x00813023);
+        push_instr(&mut code, 0x00813023);
 
         // mv fp, sp
-        push_instr(&mut func_code, 0x00010413);
+        push_instr(&mut code, 0x00010413);
 
         let mut used_registers = HashSet::new();
         for block in func.blocks.iter() {
@@ -282,19 +294,31 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<String> {
 
         // Push used registers
         let used_registers: Vec<_> = used_registers.into_iter().collect();
-        push_instr(&mut func_code, 0x00010113 | ((-(used_registers.len() as i32) * 8) << 20) as u32);
-        for (i, register) in used_registers.iter().enumerate() {
-            let register = Register::convert_nonarg_register_id(*register);
-            let offset = i as u32 * 8;
-            push_instr(&mut func_code, 0x03023 | (Register::Sp.get_register() << 15) | (register.get_register() << 20) | ((offset & 0x1f) << 7) | ((offset & !0x1f) << 25));
+        if !used_registers.is_empty() {
+            push_instr(
+                &mut code,
+                0x00010113 | ((-(used_registers.len() as i32) * 8) << 20) as u32,
+            );
+            for (i, register) in used_registers.iter().enumerate() {
+                let register = Register::convert_nonarg_register_id(*register);
+                let offset = i as u32 * 8;
+                push_instr(
+                    &mut code,
+                    0x03023
+                        | (Register::Sp.get_register() << 15)
+                        | (register.get_register() << 20)
+                        | ((offset & 0x1f) << 7)
+                        | ((offset & !0x1f) << 25),
+                );
+            }
         }
 
         let mut local_to_register = HashMap::new();
         let mut register_lifetimes = vec![0; NONARG_REGISTER_COUNT];
+        // let mut block_to_addr: HashMap<usize, usize> = HashMap::new();
+        // let mut block_refs: HashMap<usize, usize> = HashMap::new();
 
         for block in func.blocks.iter() {
-            func_code.addrs.insert(block.id, func_code.data.len()..0);
-
             for ssa in block.ssas.iter() {
                 for lifetime in register_lifetimes.iter_mut() {
                     if *lifetime != 0 {
@@ -315,17 +339,72 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<String> {
                 }
 
                 match ssa.instr {
-                    IrInstruction::Call => todo!(),
+                    IrInstruction::Call => {
+                        // TODO: save caller saved registers
+
+                        for (i, arg) in ssa.args.iter().skip(1).enumerate() {
+                            let dest = Register::convert_arg_register_id(i);
+
+                            match arg {
+                                IrArgument::Literal(float) => {
+                                    load_float(&mut code, dest, *float);
+                                }
+
+                                IrArgument::Local(_) => todo!(),
+                                IrArgument::Argument(_) => todo!(),
+                                IrArgument::Atom(_) => todo!(),
+                                IrArgument::Function(_) => todo!(),
+                                IrArgument::BasicBlock(_) => todo!(),
+                                IrArgument::Closed(_) => todo!(),
+                            }
+                        }
+
+                        match ssa.args.first().unwrap() {
+                            IrArgument::Literal(_) => unreachable!(),
+                            IrArgument::Local(_) => todo!(),
+                            IrArgument::Argument(_) => todo!(),
+                            IrArgument::Atom(_) => todo!(),
+
+                            IrArgument::Function(func) => {
+                                // auipc s11, higher 20 bits of the offset
+                                let instr = 0x17 | (Register::S11.get_register() << 7);
+                                code.refs.insert(code.data.len(), (func.clone(), RiscVRelocations::Upper20Bits));
+                                push_instr(&mut code, instr);
+
+                                // jal lower 12 bits of the offset(s11)
+                                let instr = 0x67 | (Register::S11.get_register() << 15) | (Register::Ra.get_register() << 7);
+                                code.refs.insert(code.data.len(), (func.clone(), RiscVRelocations::Lower12Bits));
+                                push_instr(&mut code, instr);
+                            }
+
+                            IrArgument::BasicBlock(_) => todo!(),
+                            IrArgument::Closed(_) => todo!(),
+                        }
+
+                        if let Some(local) = ssa.local {
+                            let reg = *local_to_register.get(&local).unwrap();
+                            generate_mov(&mut code, reg, Register::A0);
+                        }
+
+                        // TODO: pop caller saved registers
+                    }
+
                     IrInstruction::List => todo!(),
-
                     IrInstruction::Load => todo!(),
-
                     IrInstruction::Set => todo!(),
 
                     IrInstruction::Literal => {
                         if let Some(local) = ssa.local {
                             let reg = *local_to_register.get(&local).unwrap();
-                            load_float(&mut func_code, reg, if let IrArgument::Literal(lit) = ssa.args[0] { lit } else { unreachable!(); });
+                            load_float(
+                                &mut code,
+                                reg,
+                                if let IrArgument::Literal(lit) = ssa.args[0] {
+                                    lit
+                                } else {
+                                    unreachable!();
+                                },
+                            );
                         }
                     }
 
@@ -344,11 +423,19 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<String> {
                 IrInstruction::Ret => {
                     match &block.terminator.args[0] {
                         IrArgument::Literal(float) => {
-                            load_float(&mut func_code, Register::A0, *float);
+                            load_float(&mut code, Register::A0, *float);
                         }
 
-                        IrArgument::Local(_) => todo!(),
-                        IrArgument::Argument(_) => todo!(),
+                        IrArgument::Local(local) => {
+                            let reg = *local_to_register.get(local).unwrap();
+                            generate_mov(&mut code, Register::A0, reg);
+                        }
+
+                        IrArgument::Argument(arg) => {
+                            let reg = Register::convert_arg_register_id(*arg);
+                            generate_mov(&mut code, Register::A0, reg);
+                        }
+
                         IrArgument::Atom(_) => todo!(),
 
                         IrArgument::Function(_) => todo!(),
@@ -358,17 +445,39 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<String> {
                         IrArgument::BasicBlock(_) => unreachable!(),
                     }
 
+                    if !used_registers.is_empty() {
+                        for (i, register) in used_registers.iter().enumerate() {
+                            let register = Register::convert_nonarg_register_id(*register);
+                            let offset = i as u32 * 8;
+                            push_instr(
+                                &mut code,
+                                0x03003
+                                    | (Register::Sp.get_register() << 15)
+                                    | (register.get_register() << 7)
+                                    | (offset << 20),
+                            );
+                        }
+
+                        push_instr(
+                            &mut code,
+                            0x00010113 | ((used_registers.len() * 8) << 20) as u32,
+                        );
+                    }
+
                     // mv sp, fp
-                    push_instr(&mut func_code, 0x00040113);
+                    push_instr(&mut code, 0x00040113);
+
+                    // ld ra, 8(sp)
+                    push_instr(&mut code, 0x00813083);
 
                     // ld fp, 0(sp)
-                    push_instr(&mut func_code, 0x00013403);
+                    push_instr(&mut code, 0x00013403);
 
-                    // addi sp, sp, -8
-                    push_instr(&mut func_code, 0xff810113);
+                    // addi sp, sp, 16
+                    push_instr(&mut code, 0x01010113);
 
                     // ret
-                    push_instr(&mut func_code, 0x00008067);
+                    push_instr(&mut code, 0x00008067);
                 }
 
                 IrInstruction::Jump => todo!(),
@@ -377,7 +486,6 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<String> {
             }
         }
 
-        code.data.append(&mut func_code.data);
         code.addrs.get_mut(&func.name).unwrap().end = code.data.len();
     }
 
