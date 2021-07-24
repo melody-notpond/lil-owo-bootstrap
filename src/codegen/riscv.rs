@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::super::ir::{IrArgument, IrInstruction, IrModule};
 use super::{linear_scan, GeneratedCode};
@@ -177,42 +177,65 @@ fn load_float<T: std::hash::Hash + Eq + PartialEq>(
     float: f64,
 ) {
     let mut as_bits = float.to_bits();
-    let reg = reg.get_register();
 
-    // lui reg, most significant 20 bits of float
-    let instr = 0x37 | (reg << 7) | ((as_bits & 0xfffff00000000000) >> 32) as u32;
-    push_instr(code, instr);
-    as_bits &= !0xfffff00000000000;
+    if reg.is_register() {
+        let reg = reg.get_register();
 
-    // Do the remaining bits
-    as_bits &= 0x00000fffffffffff;
-    if as_bits != 0 {
-        let bits = [(as_bits >> 33) & 0x7ff, (as_bits >> 22) & 0x7ff, (as_bits >> 11) & 0x7ff, as_bits & 0x7ff];
+        // lui reg, most significant 20 bits of float
+        let instr = 0x37 | (reg << 7) | ((as_bits & 0xfffff00000000000) >> 32) as u32;
+        push_instr(code, instr);
+        as_bits &= !0xfffff00000000000;
 
-        let mut bitshift_acc = 0;
-        for bits in bits {
-            bitshift_acc += 11;
-            if bits == 0 {
-                continue;
+        // Do the remaining bits
+        as_bits &= 0x00000fffffffffff;
+        if as_bits != 0 {
+            let bits = [(as_bits >> 33) & 0x7ff, (as_bits >> 22) & 0x7ff, (as_bits >> 11) & 0x7ff, as_bits & 0x7ff];
+
+            let mut bitshift_acc = 0;
+            for bits in bits {
+                bitshift_acc += 11;
+                if bits == 0 {
+                    continue;
+                }
+
+                // slli reg, reg, bitshift_acc
+                let instr = 0x1013 | (reg << 7) | (reg << 15) | (bitshift_acc << 20);
+                push_instr(code, instr);
+                bitshift_acc = 0;
+
+                // ori reg, reg, bits
+                let instr = 0x6013 | (reg << 7) | (reg << 15) | ((bits as u32) << 20);
+                push_instr(code, instr);
             }
-
-            // slli reg, reg, bitshift_acc
-            let instr = 0x1013 | (reg << 7) | (reg << 15) | (bitshift_acc << 20);
+        } else {
+            // slli reg, reg, 31
+            let instr = 0x1013 | (reg << 7) | (reg << 15) | (31 << 20);
             push_instr(code, instr);
-            bitshift_acc = 0;
 
-            // ori reg, reg, bits
-            let instr = 0x6013 | (reg << 7) | (reg << 15) | ((bits as u32) << 20);
+            // slli reg, reg, 1
+            let instr = 0x1013 | (reg << 7) | (reg << 15) | (1 << 20);
             push_instr(code, instr);
         }
     } else {
-        // slli reg, reg, 31
-        let instr = 0x1013 | (reg << 7) | (reg << 15) | (31 << 20);
-        push_instr(code, instr);
+        load_float(code, Register::S11, float);
+        generate_mov(code, reg, Register::S11);
+    }
+}
 
-        // slli reg, reg, 1
-        let instr = 0x1013 | (reg << 7) | (reg << 15) | (1 << 20);
-        push_instr(code, instr);
+fn generate_mov<T: Eq + PartialEq + std::hash::Hash>(code: &mut GeneratedCode<T>, dest: Register, source: Register) {
+    match (dest.is_register(), source.is_register()) {
+        (true, true) => {
+            let instr = 0x0013 | (dest.get_register() << 7) | (source.get_register() << 15);
+            push_instr(code, instr);
+        }
+
+        (true, false) => todo!(),
+        (false, true) => todo!(),
+
+        (false, false) => {
+            generate_mov(code, Register::S11, source);
+            generate_mov(code, dest, Register::S11);
+        }
     }
 }
 
@@ -245,16 +268,67 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<String> {
         // mv fp, sp
         push_instr(&mut func_code, 0x00010413);
 
+        let mut used_registers = HashSet::new();
+        for block in func.blocks.iter() {
+            for ssa in block.ssas.iter() {
+                if ssa.local.is_some()
+                    && Register::convert_nonarg_register_id(ssa.local_register).is_callee_saved()
+                    && !used_registers.contains(&ssa.local_register)
+                {
+                    used_registers.insert(ssa.local_register);
+                }
+            }
+        }
+
+        // Push used registers
+        let used_registers: Vec<_> = used_registers.into_iter().collect();
+        push_instr(&mut func_code, 0x00010113 | ((-(used_registers.len() as i32) * 8) << 20) as u32);
+        for (i, register) in used_registers.iter().enumerate() {
+            let register = Register::convert_nonarg_register_id(*register);
+            let offset = i as u32 * 8;
+            push_instr(&mut func_code, 0x03023 | (Register::Sp.get_register() << 15) | (register.get_register() << 20) | ((offset & 0x1f) << 7) | ((offset & !0x1f) << 25));
+        }
+
+        let mut local_to_register = HashMap::new();
+        let mut register_lifetimes = vec![0; NONARG_REGISTER_COUNT];
+
         for block in func.blocks.iter() {
             func_code.addrs.insert(block.id, func_code.data.len()..0);
 
             for ssa in block.ssas.iter() {
+                for lifetime in register_lifetimes.iter_mut() {
+                    if *lifetime != 0 {
+                        *lifetime -= 1;
+                    }
+                }
+
+                if let Some(local) = ssa.local {
+                    let register = Register::convert_nonarg_register_id(ssa.local_register);
+
+                    if register_lifetimes.len() < ssa.local_register {
+                        register_lifetimes[ssa.local_register] = ssa.local_lifetime;
+                    } else {
+                        register_lifetimes.push(ssa.local_lifetime);
+                    }
+
+                    local_to_register.insert(local, register);
+                }
+
                 match ssa.instr {
                     IrInstruction::Call => todo!(),
                     IrInstruction::List => todo!(),
+
                     IrInstruction::Load => todo!(),
+
                     IrInstruction::Set => todo!(),
-                    IrInstruction::Literal => todo!(),
+
+                    IrInstruction::Literal => {
+                        if let Some(local) = ssa.local {
+                            let reg = *local_to_register.get(&local).unwrap();
+                            load_float(&mut func_code, reg, if let IrArgument::Literal(lit) = ssa.args[0] { lit } else { unreachable!(); });
+                        }
+                    }
+
                     IrInstruction::Capture => todo!(),
                     IrInstruction::RcInc => todo!(),
                     IrInstruction::RcDec => todo!(),
