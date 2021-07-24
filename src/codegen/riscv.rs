@@ -315,10 +315,12 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
 
         let mut local_to_register = HashMap::new();
         let mut register_lifetimes = vec![0; NONARG_REGISTER_COUNT];
-        // let mut block_to_addr: HashMap<usize, usize> = HashMap::new();
-        // let mut block_refs: HashMap<usize, usize> = HashMap::new();
+        let mut block_to_addr: HashMap<usize, usize> = HashMap::new();
+        let mut block_refs: HashMap<usize, usize> = HashMap::new();
 
         for block in func.blocks.iter() {
+            block_to_addr.insert(block.id, code.data.len());
+
             for ssa in block.ssas.iter() {
                 for lifetime in register_lifetimes.iter_mut() {
                     if *lifetime != 0 {
@@ -480,7 +482,32 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                     push_instr(&mut code, 0x00008067);
                 }
 
-                IrInstruction::Jump => todo!(),
+                IrInstruction::Jump => {
+                    let next_block = if let IrArgument::BasicBlock(block) = block.terminator.args[0] {
+                        block
+                    } else {
+                        unreachable!();
+                    };
+
+                    if let Some(next) = block_to_addr.get(&next_block) {
+                        let diff = *next as isize - code.data.len() as isize;
+
+                        if diff >= i32::MAX as isize || diff < i32::MIN as isize {
+                            panic!("unsupported difference");
+                        }
+
+                        // auipc s11, higher 20 bits of the offset
+                        let instr = 0x17 | (Register::S11.get_register() << 7) | ((diff & 0xfffff000) as u32);
+                        push_instr(&mut code, instr);
+
+                        // jal lower 12 bits of the offset(s11)
+                        let instr = 0x67 | (Register::S11.get_register() << 15) | (Register::Ra.get_register() << 7) | (((diff & 0xfff) as u32) << 20);
+                        push_instr(&mut code, instr);
+                    } else {
+                        todo!();
+                    }
+                }
+
                 IrInstruction::Branch => todo!(),
                 _ => unreachable!(),
             }

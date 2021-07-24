@@ -11,7 +11,7 @@ use lil_owo_bootstrap::parser;
 
 fn main() {
     let parse = "
-    (func f (n) (n)) 2
+    (func loop (n) (loop n)) 0
     ";
     println!("{}", parse);
     let ast = parser::parse("stdin", parse).unwrap();
