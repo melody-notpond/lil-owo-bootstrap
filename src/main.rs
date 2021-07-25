@@ -1,13 +1,13 @@
+use std::collections::HashMap;
 use std::fs::File;
+use std::io::Write;
 
-use faerie::{ArtifactBuilder, Decl, Link};
-use target_lexicon::{
-    Architecture, BinaryFormat, Environment, OperatingSystem, Riscv64Architecture, Triple, Vendor,
-};
+use object::{Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationKind, SymbolFlags, SymbolKind, SymbolScope};
+use object::write::{Object, Relocation, StandardSection, Symbol, SymbolSection};
 
-use lil_owo_bootstrap::codegen::riscv;
 use lil_owo_bootstrap::ir;
 use lil_owo_bootstrap::parser;
+use lil_owo_bootstrap::codegen::riscv;
 
 fn main() {
     let parse = "
@@ -18,6 +18,120 @@ fn main() {
     let mut root = ir::ast_to_ir(ast).unwrap();
     println!("{}", root);
     let code = riscv::generate_code(&mut root);
+
+    let mut obj = Object::new(BinaryFormat::Elf, Architecture::Riscv64, Endianness::Little);
+    let mut funcs: HashMap<&str, _> = HashMap::new();
+    let mut symbols = HashMap::new();
+
+    for (name, range) in code.get_addrs() {
+        if range.start == range.end {
+            continue;
+        }
+
+        let (section_id, _) = obj.add_subsection(StandardSection::Text, name.as_bytes(), &code.data()[range.start..range.end], 16);
+        funcs.insert(name, section_id);
+        obj.add_symbol(Symbol {
+            name: name.as_bytes().to_owned(),
+            value: 0,
+            size: (range.end - range.start) as u64,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: SymbolSection::Section(section_id),
+            flags: SymbolFlags::None,
+        });
+    }
+
+    for (name, range) in code.get_addrs() {
+        if range.start != range.end {
+            continue;
+        }
+
+        let mut offset = 0;
+        let mut parent = "";
+        for (name, range2) in code.get_addrs() {
+            if range2.start <= range.start && range.end < range2.end {
+                offset = (range.start - range2.start) as u64;
+                parent = name;
+                break;
+            }
+        }
+
+        let symbol_id = obj.add_symbol(Symbol {
+            name: name.as_bytes().to_owned(),
+            value: offset,
+            size: 1,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: SymbolSection::Section(*funcs.get(parent).unwrap()),
+            flags: SymbolFlags::None,
+        });
+
+        symbols.insert(name, symbol_id);
+    }
+
+    for (addr, (to, reloc_type)) in code.get_relocation_table() {
+        for (from, range) in code.get_addrs() {
+            if range.start <= *addr && *addr < range.end {
+                let from = *funcs.get(from.as_str()).unwrap();
+                let symbol = match funcs.get(to.as_str()) {
+                    Some(v) => obj.section_symbol(*v),
+                    None => *symbols.get(to).unwrap()
+                };
+
+                match obj.add_relocation(from, Relocation {
+                    offset: (*addr - range.start) as u64,
+                    size: reloc_type.get_size(),
+                    kind: RelocationKind::Elf(reloc_type.as_int()),
+                    encoding: RelocationEncoding::Generic,
+                    symbol,
+                    addend: 0,
+                }) {
+                    Ok(_) => (),
+                    Err(e) => {
+                        eprintln!("Error creating relocation: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    let obj = match obj.write() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error writing object file to vector: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let mut file = match File::create("uwu.o") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error getting file uwu.o: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    match file.set_len(0) {
+        Ok(_) => (),
+        Err(e) => {
+            eprintln!("Error clearing file: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    match file.write(&obj) {
+        Ok(_) => (),
+        Err(e) => {
+            eprintln!("Error writing to file: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    /*
     let mut artefact = ArtifactBuilder::new(Triple {
         architecture: Architecture::Riscv64(Riscv64Architecture::Riscv64gc),
         vendor: Vendor::Unknown,
@@ -65,14 +179,14 @@ fn main() {
         }
     }
 
-    for (addr, to) in code.get_relocation_table() {
+    for (addr, (to, reloc_type)) in code.get_relocation_table() {
         for (from, range) in code.get_addrs() {
             if range.start <= *addr && *addr < range.end {
-                match artefact.link(Link {
+                match artefact.link_with(Link {
                     from,
-                    to: &to.0,
+                    to,
                     at: (addr - range.start) as u64,
-                }) {
+                }, Reloc::Raw { reloc: reloc_type.as_int(), addend: 0 }) {
                     Ok(_) => (),
                     Err(e) => {
                         eprintln!("Error linking: {}", e);
@@ -96,4 +210,5 @@ fn main() {
             eprintln!("Error writing artefact to file: {}", e);
         }
     }
+*/
 }

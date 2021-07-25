@@ -12,7 +12,24 @@ pub enum RiscVRelocations {
     Upper20Bits
 }
 
+impl RiscVRelocations {
+    pub fn as_int(&self) -> u32 {
+        match self {
+            RiscVRelocations::Lower12Bits => 24,
+            RiscVRelocations::Upper20Bits => 23,
+        }
+    }
+
+    pub fn get_size(&self) -> u8 {
+        match self {
+            RiscVRelocations::Lower12Bits => 12,
+            RiscVRelocations::Upper20Bits => 20,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 enum Register {
     // Zero
     Zero,
@@ -265,6 +282,7 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
         linear_scan(func, NONARG_REGISTER_COUNT);
     }
 
+    let mut last_label = 0;
     for func in root.funcs.iter() {
         code.addrs.insert(func.name.clone(), code.data.len()..0);
 
@@ -370,12 +388,15 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                             IrArgument::Function(func) => {
                                 // auipc s11, higher 20 bits of the offset
                                 let instr = 0x17 | (Register::S11.get_register() << 7);
+                                let label = format!("{}", last_label);
+                                last_label += 1;
+                                code.addrs.insert(label.clone(), code.data.len()..code.data.len());
                                 code.refs.insert(code.data.len(), (func.clone(), RiscVRelocations::Upper20Bits));
                                 push_instr(&mut code, instr);
 
                                 // jal lower 12 bits of the offset(s11)
                                 let instr = 0x67 | (Register::S11.get_register() << 15) | (Register::Ra.get_register() << 7);
-                                code.refs.insert(code.data.len(), (func.clone(), RiscVRelocations::Lower12Bits));
+                                code.refs.insert(code.data.len(), (label, RiscVRelocations::Lower12Bits));
                                 push_instr(&mut code, instr);
                             }
 
@@ -501,7 +522,7 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                         push_instr(&mut code, instr);
 
                         // jal lower 12 bits of the offset(s11)
-                        let instr = 0x67 | (Register::S11.get_register() << 15) | (Register::Ra.get_register() << 7) | (((diff & 0xfff) as u32) << 20);
+                        let instr = 0x67 | (Register::S11.get_register() << 15) | (((diff & 0xfff) as u32) << 20);
                         push_instr(&mut code, instr);
                     } else {
                         todo!();
