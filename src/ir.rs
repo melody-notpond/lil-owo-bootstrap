@@ -916,7 +916,7 @@ fn unneeded_set_remover(func: &mut IrFunction) {
 pub fn ast_to_ir(ast: Ast) -> Result<IrModule, IrError> {
     let mut module = IrModule { funcs: vec![] };
     let mut func = IrFunction {
-        name: String::from(".main"),
+        name: String::from("main"),
         argc: 0,
         captured: vec![],
         blocks: vec![],

@@ -334,7 +334,7 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
         let mut local_to_register = HashMap::new();
         let mut register_lifetimes = vec![0; NONARG_REGISTER_COUNT];
         let mut block_to_addr: HashMap<usize, usize> = HashMap::new();
-        let mut block_refs: HashMap<usize, usize> = HashMap::new();
+        // let mut block_refs: HashMap<usize, usize> = HashMap::new();
 
         for block in func.blocks.iter() {
             block_to_addr.insert(block.id, code.data.len());
