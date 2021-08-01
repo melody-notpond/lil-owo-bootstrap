@@ -282,7 +282,7 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
         linear_scan(func, NONARG_REGISTER_COUNT);
     }
 
-    let mut last_label = 0;
+    let mut last_label = 1;
     for func in root.funcs.iter() {
         code.addrs.insert(func.name.clone(), code.data.len()..0);
 
@@ -538,4 +538,20 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
     }
 
     code
+}
+
+pub fn generate_start_fn(code: &mut GeneratedCode<RiscVRelocations>) {
+    code.addrs.insert(String::from("_start"), code.data.len()..0);
+
+    // auipc s11, higher 20 bits of the offset
+    let instr = 0x17 | (Register::S11.get_register() << 7);
+    code.refs.insert(code.data.len(), (String::from("main"), RiscVRelocations::Upper20Bits));
+    push_instr(code, instr);
+
+    // jal lower 12 bits of the offset(s11)
+    let instr = 0x67 | (Register::S11.get_register() << 15) | (Register::Ra.get_register() << 7);
+    code.refs.insert(code.data.len(), (String::from("_start"), RiscVRelocations::Lower12Bits));
+    push_instr(code, instr);
+
+    code.addrs.get_mut("_start").unwrap().end = code.data.len();
 }

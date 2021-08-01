@@ -17,7 +17,8 @@ fn main() {
     let ast = parser::parse("stdin", parse).unwrap();
     let mut root = ir::ast_to_ir(ast).unwrap();
     println!("{}", root);
-    let code = riscv::generate_code(&mut root);
+    let mut code = riscv::generate_code(&mut root);
+    riscv::generate_start_fn(&mut code);
 
     let mut obj = Object::new(BinaryFormat::Elf, Architecture::Riscv64, Endianness::Little);
     let mut funcs: HashMap<&str, _> = HashMap::new();
