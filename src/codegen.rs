@@ -1,6 +1,6 @@
 pub mod riscv;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use super::ir::IrFunction;
@@ -8,6 +8,7 @@ use super::ir::IrFunction;
 #[derive(Debug)]
 pub struct GeneratedCode<T> {
     addrs: HashMap<String, Range<usize>>,
+    externs: HashSet<String>,
     refs: HashMap<usize, (String, T)>,
     data: Vec<u8>,
 }
@@ -15,6 +16,10 @@ pub struct GeneratedCode<T> {
 impl<T> GeneratedCode<T> {
     pub fn data(&self) -> &Vec<u8> {
         &self.data
+    }
+
+    pub fn get_externs(&self) -> &HashSet<String> {
+        &self.externs
     }
 
     pub fn get_addrs(&self) -> &HashMap<String, Range<usize>> {

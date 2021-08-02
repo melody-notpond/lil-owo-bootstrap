@@ -169,7 +169,6 @@ impl Display for IrModule {
 
 #[derive(Debug)]
 pub enum IrError {
-    UnknownSymbol,
     EndNotFound,
     FuncNameNotFound,
     FuncArgsNotFound,
@@ -225,7 +224,7 @@ fn ast_to_ir_helper<'a>(
         Ast::Symbol(sym) => {
             let (mut value, closed) = match scope::get(scope, sym) {
                 Some(v) => v,
-                None => return Err(IrError::UnknownSymbol),
+                None => (IrArgument::Function(String::from(sym)), false),
             };
             if closed && !matches!(value, IrArgument::Atom(_) | IrArgument::Function(_)) {
                 value = IrArgument::Closed(func.captured.len());
@@ -604,8 +603,6 @@ fn ast_to_ir_helper<'a>(
 
                     Ok(local)
                 }
-
-                Ast::Symbol(_) => Err(IrError::UnknownSymbol),
 
                 _ => {
                     let f = match ast_to_ir_helper(*f, scope, module, func, block)? {

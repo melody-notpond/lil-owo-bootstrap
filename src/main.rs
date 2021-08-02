@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 
-use object::{Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationKind, SymbolFlags, SymbolKind, SymbolScope};
+use object::{Architecture, BinaryFormat, Endianness, FileFlags, RelocationEncoding, RelocationKind, SymbolFlags, SymbolKind, SymbolScope};
 use object::write::{Object, Relocation, StandardSection, Symbol, SymbolSection};
 
 use lil_owo_bootstrap::ir;
@@ -11,7 +11,11 @@ use lil_owo_bootstrap::codegen::riscv;
 
 fn main() {
     let parse = "
-    (func loop (n) (loop n)) 0
+    (func loop (n)
+        (begin
+            (test 1)
+            (loop n)
+        end)) 0
     ";
     println!("{}", parse);
     let ast = parser::parse("stdin", parse).unwrap();
@@ -21,6 +25,9 @@ fn main() {
     riscv::generate_start_fn(&mut code);
 
     let mut obj = Object::new(BinaryFormat::Elf, Architecture::Riscv64, Endianness::Little);
+    obj.flags = FileFlags::Elf {
+        e_flags: 0x4
+    };
     let mut funcs: HashMap<&str, _> = HashMap::new();
     let mut symbols = HashMap::new();
 
@@ -70,6 +77,21 @@ fn main() {
         });
 
         symbols.insert(name, symbol_id);
+    }
+
+    for external_func in code.get_externs().iter() {
+        let symbol_id = obj.add_symbol(Symbol {
+            name: external_func.as_bytes().to_owned(),
+            value: 0,
+            size: 0,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: SymbolSection::Undefined,
+            flags: SymbolFlags::None,
+        });
+
+        symbols.insert(external_func, symbol_id);
     }
 
     for (addr, (to, reloc_type)) in code.get_relocation_table() {

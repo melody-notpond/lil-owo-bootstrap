@@ -271,9 +271,17 @@ fn generate_mov<T>(
     }
 }
 
+fn j_type(imm: i32) -> u32 {
+    // imm[20|10:1|11|19:12]
+    // I hate this so much >:(
+    let imm = imm as u32;
+    (imm & (1 << 20)) << 11 | ((imm & 0x7fe) << 20) | ((imm & 0x800) << 9) | (imm & 0xff000)
+}
+
 pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
     let mut code = GeneratedCode {
         addrs: HashMap::new(),
+        externs: HashSet::new(),
         refs: HashMap::new(),
         data: vec![],
     };
@@ -511,18 +519,14 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                     };
 
                     if let Some(next) = block_to_addr.get(&next_block) {
-                        let diff = *next as isize - code.data.len() as isize;
+                        let diff = (*next as isize - code.data.len() as isize) as i32;
 
-                        if diff >= i32::MAX as isize || diff < i32::MIN as isize {
+                        if diff >= 2i32.pow(20) || diff < -(2i32.pow(20)) {
                             panic!("unsupported difference");
                         }
 
-                        // auipc s11, higher 20 bits of the offset
-                        let instr = 0x17 | (Register::S11.get_register() << 7) | ((diff & 0xfffff000) as u32);
-                        push_instr(&mut code, instr);
-
                         // jal lower 12 bits of the offset(s11)
-                        let instr = 0x67 | (Register::S11.get_register() << 15) | (((diff & 0xfff) as u32) << 20);
+                        let instr = 0x6f | j_type(diff);
                         push_instr(&mut code, instr);
                     } else {
                         todo!();
@@ -535,6 +539,12 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
         }
 
         code.addrs.get_mut(&func.name).unwrap().end = code.data.len();
+    }
+
+    for (_, (name, _)) in code.refs.iter() {
+        if !code.addrs.contains_key(name) {
+            code.externs.insert(name.clone());
+        }
     }
 
     code
