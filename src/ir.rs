@@ -307,7 +307,7 @@ fn ast_to_ir_helper<'a>(
                         for (i, arg) in args.into_iter().enumerate() {
                             if i != last_index {
                                 last = ast_to_ir_helper(arg, scope, module, func, block)?;
-                                if i < last_index - 1 {
+                                if i < last_index - 1 && last.is_some() {
                                     block.ssas.last_mut().unwrap().local = None;
                                 }
                             }

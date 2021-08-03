@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use super::super::ir::{IrArgument, IrInstruction, IrModule};
-use super::{linear_scan, GeneratedCode};
+use super::{linear_scan, GeneratedCode, NaNBoxedTag};
 
 const ARG_REGISTER_COUNT: usize = 8;
-const NONARG_REGISTER_COUNT: usize = 17;
+const NONARG_REGISTER_COUNT: usize = 16;
 
 #[derive(Debug)]
 pub enum RiscVRelocations {
@@ -75,13 +75,13 @@ enum Register {
     S8,
     S9,
     S10,
-
-    // Temporary register for calculations
     S11,
 
     // Temporaries (locals)
     T3,
     T4,
+
+    // Temporary registers for calculations
     T5,
     T6,
 
@@ -134,13 +134,12 @@ impl Register {
             7 => S8,
             8 => S9,
             9 => S10,
-            10 => T0,
-            11 => T1,
-            12 => T2,
-            13 => T3,
-            14 => T4,
-            15 => T5,
-            16 => T6,
+            10 => S11,
+            11 => T0,
+            12 => T1,
+            13 => T2,
+            14 => T3,
+            15 => T4,
             _ => Spilled(id - NONARG_REGISTER_COUNT),
         }
     }
@@ -245,8 +244,39 @@ fn load_float<T>(
             push_instr(code, instr);
         }
     } else {
-        load_float(code, Register::S11, float);
-        generate_mov(code, reg, Register::S11);
+        load_float(code, Register::T6, float);
+        generate_mov(code, reg, Register::T6);
+    }
+}
+
+fn load_atom(code: &mut GeneratedCode<RiscVRelocations>, last_label: &mut usize, reg: Register, atom: &str) {
+    if reg.is_register() {
+        if !code.atoms.contains(atom) {
+            code.atoms.insert(String::from(atom));
+        }
+
+        // auipc reg, higher 20 bits of the offset
+        let instr = 0x17 | (reg.get_register() << 7);
+        let label = format!("{}", last_label);
+        *last_label += 1;
+        code.addrs.insert(label.clone(), code.data.len()..code.data.len());
+        code.refs.insert(code.data.len(), (String::from(atom), RiscVRelocations::Upper20Bits));
+        push_instr(code, instr);
+
+        // addi reg, reg, lower 12 bits of the offset
+        let instr = 0x13 | (reg.get_register() << 15) | (reg.get_register() << 7);
+        code.refs.insert(code.data.len(), (label, RiscVRelocations::Lower12Bits));
+        push_instr(code, instr);
+
+        // load_float t5, nan(atom)
+        load_float(code, Register::T5, NaNBoxedTag::Atom.get_tagged_nan());
+
+        // or reg, reg, t5
+        let instr = 0x6033 | (reg.get_register() << 7) | (reg.get_register() << 15) | (Register::T5.get_register() << 20);
+        push_instr(code, instr);
+    } else {
+        load_atom(code, last_label, Register::T6, atom);
+        generate_mov(code, reg, Register::T6);
     }
 }
 
@@ -265,8 +295,8 @@ fn generate_mov<T>(
         (false, true) => todo!(),
 
         (false, false) => {
-            generate_mov(code, Register::S11, source);
-            generate_mov(code, dest, Register::S11);
+            generate_mov(code, Register::T6, source);
+            generate_mov(code, dest, Register::T6);
         }
     }
 }
@@ -282,6 +312,7 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
     let mut code = GeneratedCode {
         addrs: HashMap::new(),
         externs: HashSet::new(),
+        atoms: HashSet::new(),
         refs: HashMap::new(),
         data: vec![],
     };
@@ -394,16 +425,29 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                             IrArgument::Atom(_) => todo!(),
 
                             IrArgument::Function(func) => {
-                                // auipc s11, higher 20 bits of the offset
-                                let instr = 0x17 | (Register::S11.get_register() << 7);
+                                // Add external function
+                                let mut contains_func = false;
+                                for f in root.funcs.iter() {
+                                    if f.name == *func {
+                                        contains_func = true;
+                                        break;
+                                    }
+                                }
+
+                                if !contains_func {
+                                    code.externs.insert(func.clone());
+                                }
+
+                                // auipc t6, higher 20 bits of the offset
+                                let instr = 0x17 | (Register::T6.get_register() << 7);
                                 let label = format!("{}", last_label);
                                 last_label += 1;
                                 code.addrs.insert(label.clone(), code.data.len()..code.data.len());
                                 code.refs.insert(code.data.len(), (func.clone(), RiscVRelocations::Upper20Bits));
                                 push_instr(&mut code, instr);
 
-                                // jal lower 12 bits of the offset(s11)
-                                let instr = 0x67 | (Register::S11.get_register() << 15) | (Register::Ra.get_register() << 7);
+                                // jalr lower 12 bits of the offset(t6)
+                                let instr = 0x67 | (Register::T6.get_register() << 15) | (Register::Ra.get_register() << 7);
                                 code.refs.insert(code.data.len(), (label, RiscVRelocations::Lower12Bits));
                                 push_instr(&mut code, instr);
                             }
@@ -467,7 +511,9 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                             generate_mov(&mut code, Register::A0, reg);
                         }
 
-                        IrArgument::Atom(_) => todo!(),
+                        IrArgument::Atom(atom) => {
+                            load_atom(&mut code, &mut last_label, Register::A0, atom);
+                        }
 
                         IrArgument::Function(_) => todo!(),
 
@@ -525,7 +571,7 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                             panic!("unsupported difference");
                         }
 
-                        // jal lower 12 bits of the offset(s11)
+                        // j diff
                         let instr = 0x6f | j_type(diff);
                         push_instr(&mut code, instr);
                     } else {
@@ -541,25 +587,19 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
         code.addrs.get_mut(&func.name).unwrap().end = code.data.len();
     }
 
-    for (_, (name, _)) in code.refs.iter() {
-        if !code.addrs.contains_key(name) {
-            code.externs.insert(name.clone());
-        }
-    }
-
     code
 }
 
 pub fn generate_start_fn(code: &mut GeneratedCode<RiscVRelocations>) {
     code.addrs.insert(String::from("_start"), code.data.len()..0);
 
-    // auipc s11, higher 20 bits of the offset
-    let instr = 0x17 | (Register::S11.get_register() << 7);
+    // auipc t6, higher 20 bits of the offset
+    let instr = 0x17 | (Register::T6.get_register() << 7);
     code.refs.insert(code.data.len(), (String::from("main"), RiscVRelocations::Upper20Bits));
     push_instr(code, instr);
 
-    // jal lower 12 bits of the offset(s11)
-    let instr = 0x67 | (Register::S11.get_register() << 15) | (Register::Ra.get_register() << 7);
+    // jalr lower 12 bits of the offset(t6)
+    let instr = 0x67 | (Register::T6.get_register() << 15) | (Register::Ra.get_register() << 7);
     code.refs.insert(code.data.len(), (String::from("_start"), RiscVRelocations::Lower12Bits));
     push_instr(code, instr);
 

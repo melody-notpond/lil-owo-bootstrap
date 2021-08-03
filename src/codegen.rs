@@ -5,10 +5,41 @@ use std::ops::Range;
 
 use super::ir::IrFunction;
 
+#[derive(Debug, Copy, Clone)]
+pub enum NaNBoxedTag {
+    NaN,
+    Atom,
+    Function,
+    Integer,
+    Reference,
+    VectorBytes,
+    Closure,
+    Stream
+}
+
+impl NaNBoxedTag {
+    pub fn get_tagged_nan(&self) -> f64 {
+        use NaNBoxedTag::*;
+
+        let nan = f64::NAN.to_bits();
+        f64::from_bits(match self {
+            NaN => nan,
+            Atom => nan | 0x0000200000000000,
+            Function => nan | 0x0000040000000000,
+            Integer => nan | 0x0000600000000000,
+            Reference => nan | 0x8000000000000000,
+            VectorBytes => nan | 0x8000200000000000,
+            Closure => nan | 0x8000400000000000,
+            Stream => nan | 0x8000600000000000,
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct GeneratedCode<T> {
     addrs: HashMap<String, Range<usize>>,
     externs: HashSet<String>,
+    atoms: HashSet<String>,
     refs: HashMap<usize, (String, T)>,
     data: Vec<u8>,
 }
@@ -20,6 +51,10 @@ impl<T> GeneratedCode<T> {
 
     pub fn get_externs(&self) -> &HashSet<String> {
         &self.externs
+    }
+
+    pub fn get_atoms(&self) -> &HashSet<String> {
+        &self.atoms
     }
 
     pub fn get_addrs(&self) -> &HashMap<String, Range<usize>> {

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 
-use object::{Architecture, BinaryFormat, Endianness, FileFlags, RelocationEncoding, RelocationKind, SymbolFlags, SymbolKind, SymbolScope};
+use object::{Architecture, BinaryFormat, Endianness, FileFlags, RelocationEncoding, RelocationKind, SectionKind, SymbolFlags, SymbolKind, SymbolScope};
 use object::write::{Object, Relocation, StandardSection, Symbol, SymbolSection};
 
 use lil_owo_bootstrap::ir;
@@ -11,11 +11,10 @@ use lil_owo_bootstrap::codegen::riscv;
 
 fn main() {
     let parse = "
-    (func loop (n)
-        (begin
-            (test 1)
-            (loop n)
-        end)) 0
+    begin
+        (atom a)
+        a
+    end
     ";
     println!("{}", parse);
     let ast = parser::parse("stdin", parse).unwrap();
@@ -30,6 +29,7 @@ fn main() {
     };
     let mut funcs: HashMap<&str, _> = HashMap::new();
     let mut symbols = HashMap::new();
+    let atom_section = obj.add_section(vec![], "lil_owo_atoms".as_bytes().to_owned(), SectionKind::ReadOnlyData);
 
     for (name, range) in code.get_addrs() {
         if range.start == range.end {
@@ -79,7 +79,27 @@ fn main() {
         symbols.insert(name, symbol_id);
     }
 
-    for external_func in code.get_externs().iter() {
+    let mut offset = 0;
+    for atom in code.get_atoms() {
+        let symbol_id = obj.add_symbol(Symbol {
+            name: atom.as_bytes().to_owned(),
+            value: offset,
+            size: atom.len() as u64,
+            kind: SymbolKind::Data,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: SymbolSection::Section(atom_section),
+            flags: SymbolFlags::None,
+        });
+        let section = obj.section_mut(atom_section);
+        section.append_data(atom.as_bytes(), 16);
+        section.append_data(&[0], 1);
+        offset += atom.len() as u64 + 1;
+
+        symbols.insert(atom, symbol_id);
+    }
+
+    for external_func in code.get_externs() {
         let symbol_id = obj.add_symbol(Symbol {
             name: external_func.as_bytes().to_owned(),
             value: 0,
