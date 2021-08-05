@@ -11,8 +11,8 @@ pub enum NaNBoxedTag {
     Atom,
     Function,
     Integer,
-    Reference,
-    VectorBytes,
+    Bytes,
+    Vector,
     Closure,
     Stream
 }
@@ -27,8 +27,8 @@ impl NaNBoxedTag {
             Atom => nan | 0x0000200000000000,
             Function => nan | 0x0000040000000000,
             Integer => nan | 0x0000600000000000,
-            Reference => nan | 0x8000000000000000,
-            VectorBytes => nan | 0x8000200000000000,
+            Bytes => nan | 0x8000000000000000,
+            Vector => nan | 0x8000200000000000,
             Closure => nan | 0x8000400000000000,
             Stream => nan | 0x8000600000000000,
         })

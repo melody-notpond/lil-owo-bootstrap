@@ -10,12 +10,21 @@ use lil_owo_bootstrap::parser;
 use lil_owo_bootstrap::codegen::riscv;
 
 fn main() {
-    let parse = "
-    begin
-        (atom a)
-        a
-    end
+    let mut parse = "
+        (extern test)
+        (func loop (n)
+            (seq
+                (test n)
+                (loop n)))
+        (loop 0)
     ";
+
+    let mut v = String::from("seq\n");
+    if !parse.trim().starts_with("seq") {
+        v.push_str(parse);
+        parse = v.as_str();
+    }
+
     println!("{}", parse);
     let ast = parser::parse("stdin", parse).unwrap();
     let mut root = ir::ast_to_ir(ast).unwrap();

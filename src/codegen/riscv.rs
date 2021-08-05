@@ -311,7 +311,11 @@ fn j_type(imm: i32) -> u32 {
 pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
     let mut code = GeneratedCode {
         addrs: HashMap::new(),
-        externs: HashSet::new(),
+        externs: root.funcs.iter().filter_map(|v| if v.external {
+            Some(v.name.clone())
+        } else {
+            None
+        }).collect(),
         atoms: HashSet::new(),
         refs: HashMap::new(),
         data: vec![],
@@ -323,6 +327,10 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
 
     let mut last_label = 1;
     for func in root.funcs.iter() {
+        if func.external {
+            continue;
+        }
+
         code.addrs.insert(func.name.clone(), code.data.len()..0);
 
         // addi sp, sp, -16
@@ -425,19 +433,6 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                             IrArgument::Atom(_) => todo!(),
 
                             IrArgument::Function(func) => {
-                                // Add external function
-                                let mut contains_func = false;
-                                for f in root.funcs.iter() {
-                                    if f.name == *func {
-                                        contains_func = true;
-                                        break;
-                                    }
-                                }
-
-                                if !contains_func {
-                                    code.externs.insert(func.clone());
-                                }
-
                                 // auipc t6, higher 20 bits of the offset
                                 let instr = 0x17 | (Register::T6.get_register() << 7);
                                 let label = format!("{}", last_label);

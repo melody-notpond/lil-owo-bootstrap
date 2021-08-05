@@ -138,6 +138,7 @@ impl Display for IrBasicBlock {
 
 pub struct IrFunction {
     pub name: String,
+    pub external: bool,
     pub argc: usize,
     pub captured: Vec<String>,
     pub blocks: Vec<IrBasicBlock>,
@@ -146,11 +147,15 @@ pub struct IrFunction {
 
 impl Display for IrFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{}({}; {:?}):", self.name, self.argc, self.captured)?;
-        for block in self.blocks.iter() {
-            writeln!(f, "{}\n", block)?;
+        if self.external {
+            writeln!(f, "extern {}\n\n", self.name)
+        } else {
+            writeln!(f, "{}({}; {:?}):", self.name, self.argc, self.captured)?;
+            for block in self.blocks.iter() {
+                writeln!(f, "{}\n", block)?;
+            }
+            writeln!(f)
         }
-        writeln!(f)
     }
 }
 
@@ -169,7 +174,7 @@ impl Display for IrModule {
 
 #[derive(Debug)]
 pub enum IrError {
-    EndNotFound,
+    UnknownSymbol,
     FuncNameNotFound,
     FuncArgsNotFound,
     FuncBodyNotFound,
@@ -224,7 +229,7 @@ fn ast_to_ir_helper<'a>(
         Ast::Symbol(sym) => {
             let (mut value, closed) = match scope::get(scope, sym) {
                 Some(v) => v,
-                None => (IrArgument::Function(String::from(sym)), false),
+                None => return Err(IrError::UnknownSymbol),
             };
             if closed && !matches!(value, IrArgument::Atom(_) | IrArgument::Function(_)) {
                 value = IrArgument::Closed(func.captured.len());
@@ -300,22 +305,39 @@ fn ast_to_ir_helper<'a>(
                     Ok(None)
                 }
 
-                Ast::Symbol("begin") => {
-                    if let Some(Ast::Symbol("end")) = args.last() {
-                        let mut last = None;
-                        let last_index = args.len() - 1;
-                        for (i, arg) in args.into_iter().enumerate() {
-                            if i != last_index {
-                                last = ast_to_ir_helper(arg, scope, module, func, block)?;
-                                if i < last_index - 1 && last.is_some() {
-                                    block.ssas.last_mut().unwrap().local = None;
-                                }
-                            }
+                Ast::Symbol("seq") => {
+                    let mut last = None;
+                    let last_index = args.len() - 1;
+                    for (i, arg) in args.into_iter().enumerate() {
+                        last = ast_to_ir_helper(arg, scope, module, func, block)?;
+                        if i + 1 < last_index && last.is_some() {
+                            block.ssas.last_mut().unwrap().local = None;
                         }
-                        Ok(last)
-                    } else {
-                        Err(IrError::EndNotFound)
                     }
+                    Ok(last)
+                }
+
+                Ast::Symbol("extern") => {
+                    for name in args {
+                        match name {
+                            Ast::Symbol(v) => {
+                                let func = IrFunction {
+                                    name: String::from(v),
+                                    external: true,
+                                    argc: 0,
+                                    captured: vec![],
+                                    blocks: vec![],
+                                    last_local: 0,
+                                };
+                                module.funcs.push(func);
+                                scope.last_mut().unwrap().insert(String::from(v), IrArgument::Function(String::from(v)));
+                            }
+
+                            _ => return Err(IrError::FuncNameNotFound)
+                        }
+                    }
+
+                    Ok(None)
                 }
 
                 Ast::Symbol("func") => {
@@ -351,6 +373,7 @@ fn ast_to_ir_helper<'a>(
 
                     let mut f = IrFunction {
                         name: String::from(name),
+                        external: false,
                         argc: formals.len(),
                         captured: vec![],
                         blocks: vec![],
@@ -603,6 +626,8 @@ fn ast_to_ir_helper<'a>(
 
                     Ok(local)
                 }
+
+                Ast::Symbol(_) => Err(IrError::UnknownSymbol),
 
                 _ => {
                     let f = match ast_to_ir_helper(*f, scope, module, func, block)? {
@@ -914,6 +939,7 @@ pub fn ast_to_ir(ast: Ast) -> Result<IrModule, IrError> {
     let mut module = IrModule { funcs: vec![] };
     let mut func = IrFunction {
         name: String::from("main"),
+        external: false,
         argc: 0,
         captured: vec![],
         blocks: vec![],
