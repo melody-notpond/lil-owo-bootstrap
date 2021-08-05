@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::super::ir::{IrArgument, IrInstruction, IrModule};
+use super::super::ir::{IrArgument, IrBasicBlock, IrFunction, IrInstruction, IrModule};
 use super::{linear_scan, GeneratedCode, NaNBoxedTag};
 
 const ARG_REGISTER_COUNT: usize = 8;
@@ -193,6 +193,19 @@ fn push_instr<T>(code: &mut GeneratedCode<T>, instr: u32) {
     code.data.push(((instr >> 24) & 0xff) as u8);
 }
 
+fn load_int<T>(
+    code: &mut GeneratedCode<T>,
+    reg: Register,
+    int: i32,
+) {
+    if -(2i32.pow(11)) <= int && int < (2i32.pow(11)) {
+        let instr = 0x13 | (reg.get_register() << 7) | ((int as u32 & 0xfff) << 20);
+        push_instr(code, instr);
+    } else {
+        todo!();
+    }
+}
+
 fn load_float<T>(
     code: &mut GeneratedCode<T>,
     reg: Register,
@@ -212,35 +225,35 @@ fn load_float<T>(
         as_bits &= 0x00000fffffffffff;
         if as_bits != 0 {
             let bits = [
-                (as_bits >> 33) & 0x7ff,
+                (as_bits >> 32) & 0x3ff,
                 (as_bits >> 22) & 0x7ff,
                 (as_bits >> 11) & 0x7ff,
                 as_bits & 0x7ff,
             ];
 
-            let mut bitshift_acc = 0;
+            let mut bitshift_acc = -1;
             for bits in bits {
-                bitshift_acc += 11;
                 if bits == 0 {
+                    bitshift_acc += 11;
                     continue;
                 }
 
-                // slli reg, reg, bitshift_acc
-                let instr = 0x1013 | (reg << 7) | (reg << 15) | (bitshift_acc << 20);
-                push_instr(code, instr);
-                bitshift_acc = 0;
+                if bitshift_acc > 0 {
+                    // slli reg, reg, bitshift_acc
+                    let instr = 0x1013 | (reg << 7) | (reg << 15) | ((bitshift_acc as u32) << 20);
+                    push_instr(code, instr);
+                    bitshift_acc = 0;
+                } else {
+                    bitshift_acc += 11;
+                }
 
                 // ori reg, reg, bits
                 let instr = 0x6013 | (reg << 7) | (reg << 15) | ((bits as u32) << 20);
                 push_instr(code, instr);
             }
         } else {
-            // slli reg, reg, 31
-            let instr = 0x1013 | (reg << 7) | (reg << 15) | (31 << 20);
-            push_instr(code, instr);
-
-            // slli reg, reg, 1
-            let instr = 0x1013 | (reg << 7) | (reg << 15) | (1 << 20);
+            // slli reg, reg, 32
+            let instr = 0x1013 | (reg << 7) | (reg << 15) | (32 << 20);
             push_instr(code, instr);
         }
     } else {
@@ -380,11 +393,11 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
 
         let mut local_to_register = HashMap::new();
         let mut register_lifetimes = vec![0; NONARG_REGISTER_COUNT];
-        let mut block_to_addr: HashMap<usize, usize> = HashMap::new();
-        // let mut block_refs: HashMap<usize, usize> = HashMap::new();
+        let mut block_to_addr = Vec::new();
+        let mut block_refs = HashMap::new();
 
         for block in func.blocks.iter() {
-            block_to_addr.insert(block.id, code.data.len());
+            block_to_addr.push(code.data.len());
 
             for ssa in block.ssas.iter() {
                 for lifetime in register_lifetimes.iter_mut() {
@@ -413,8 +426,12 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                             let dest = Register::convert_arg_register_id(i);
 
                             match arg {
-                                IrArgument::Literal(float) => {
+                                IrArgument::Float(float) => {
                                     load_float(&mut code, dest, *float);
+                                }
+
+                                IrArgument::Int(int) => {
+                                    load_float(&mut code, Register::A0, NaNBoxedTag::Integer(*int).get_tagged_nan());
                                 }
 
                                 IrArgument::Local(_) => todo!(),
@@ -427,10 +444,13 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                         }
 
                         match ssa.args.first().unwrap() {
-                            IrArgument::Literal(_) => unreachable!(),
+                            IrArgument::Float(_) => unreachable!(),
+                            IrArgument::Int(_) => unreachable!(),
+                            IrArgument::Atom(_) => unreachable!(),
+                            IrArgument::BasicBlock(_) => unreachable!(),
+
                             IrArgument::Local(_) => todo!(),
                             IrArgument::Argument(_) => todo!(),
-                            IrArgument::Atom(_) => todo!(),
 
                             IrArgument::Function(func) => {
                                 // auipc t6, higher 20 bits of the offset
@@ -447,7 +467,6 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                                 push_instr(&mut code, instr);
                             }
 
-                            IrArgument::BasicBlock(_) => todo!(),
                             IrArgument::Closed(_) => todo!(),
                         }
 
@@ -459,7 +478,6 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                         // TODO: pop caller saved registers
                     }
 
-                    IrInstruction::List => todo!(),
                     IrInstruction::Load => todo!(),
                     IrInstruction::Set => todo!(),
 
@@ -469,8 +487,10 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                             load_float(
                                 &mut code,
                                 reg,
-                                if let IrArgument::Literal(lit) = ssa.args[0] {
+                                if let IrArgument::Float(lit) = ssa.args[0] {
                                     lit
+                                } else if let IrArgument::Int(lit) = ssa.args[0] {
+                                    NaNBoxedTag::Integer(lit).get_tagged_nan()
                                 } else {
                                     unreachable!();
                                 },
@@ -481,7 +501,13 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                     IrInstruction::Capture => todo!(),
                     IrInstruction::RcInc => todo!(),
                     IrInstruction::RcDec => todo!(),
-                    IrInstruction::Phi => todo!(),
+
+                    IrInstruction::Phi => {
+                        if let Some(local) = ssa.local {
+                            let local = *local_to_register.get(&local).unwrap();
+                            generate_mov(&mut code, local, Register::T6);
+                        }
+                    }
 
                     IrInstruction::Ret | IrInstruction::Jump | IrInstruction::Branch => {
                         unreachable!()
@@ -492,8 +518,12 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
             match block.terminator.instr {
                 IrInstruction::Ret => {
                     match &block.terminator.args[0] {
-                        IrArgument::Literal(float) => {
+                        IrArgument::Float(float) => {
                             load_float(&mut code, Register::A0, *float);
+                        }
+
+                        IrArgument::Int(int) => {
+                            load_float(&mut code, Register::A0, NaNBoxedTag::Integer(*int).get_tagged_nan());
                         }
 
                         IrArgument::Local(local) => {
@@ -559,30 +589,125 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                         unreachable!();
                     };
 
-                    if let Some(next) = block_to_addr.get(&next_block) {
-                        let diff = (*next as isize - code.data.len() as isize) as i32;
-
-                        if diff >= 2i32.pow(20) || diff < -(2i32.pow(20)) {
-                            panic!("unsupported difference");
-                        }
-
-                        // j diff
-                        let instr = 0x6f | j_type(diff);
-                        push_instr(&mut code, instr);
-                    } else {
-                        todo!();
-                    }
+                    phi(&mut code, func, block, &local_to_register);
+                    generate_jal(&mut code, next_block, &block_to_addr, &mut block_refs);
                 }
 
-                IrInstruction::Branch => todo!(),
+                IrInstruction::Branch => {
+                    let condition = &block.terminator.args[0];
+                    let on_true = if let IrArgument::BasicBlock(block) = block.terminator.args[1] {
+                        block
+                    } else {
+                        unreachable!();
+                    };
+                    let on_false = if let IrArgument::BasicBlock(block) = block.terminator.args[2] {
+                        block
+                    } else {
+                        unreachable!();
+                    };
+
+                    phi(&mut code, func, block, &local_to_register);
+
+                    let reg = match condition {
+                        IrArgument::Float(_) => todo!(),
+
+                        IrArgument::Int(int) => {
+                            load_int(&mut code, Register::T5, *int);
+                            Register::T5
+                        }
+
+                        IrArgument::Atom(_) => todo!(),
+                        IrArgument::Function(_) => todo!(),
+
+                        IrArgument::Local(local) => {
+                            let local = *local_to_register.get(local).unwrap();
+                            if local.is_register() {
+                                local
+                            } else {
+                                generate_mov(&mut code, Register::T5, local);
+                                Register::T5
+                            }
+                        }
+
+                        IrArgument::Argument(_) => todo!(),
+                        IrArgument::Closed(_) => todo!(),
+
+                        IrArgument::BasicBlock(_) => unreachable!(),
+                    };
+
+                    let instr = 0x0463 | (reg.get_register() << 15);
+                    push_instr(&mut code, instr);
+                    generate_jal(&mut code, on_true, &block_to_addr, &mut block_refs);
+                    generate_jal(&mut code, on_false, &block_to_addr, &mut block_refs);
+                }
+
                 _ => unreachable!(),
             }
+        }
+
+        for (addr, block) in block_refs {
+            let diff = block_to_addr[block] as i32 - addr as i32;
+            if diff >= 2i32.pow(20) || diff < -(2i32.pow(20)) {
+                panic!("unsupported difference");
+            }
+
+            let instr = 0x6f | j_type(diff);
+            code.data[addr    ] = (instr         & 0xff) as u8;
+            code.data[addr + 1] = ((instr >>  8) & 0xff) as u8;
+            code.data[addr + 2] = ((instr >> 16) & 0xff) as u8;
+            code.data[addr + 3] = ((instr >> 24) & 0xff) as u8;
         }
 
         code.addrs.get_mut(&func.name).unwrap().end = code.data.len();
     }
 
     code
+}
+
+fn generate_jal<T>(code: &mut GeneratedCode<T>, next_block: usize, block_to_addr: &[usize], block_refs: &mut HashMap<usize, usize>) {
+    if let Some(next) = block_to_addr.get(next_block) {
+        let diff = (*next as isize - code.data.len() as isize) as i32;
+
+        if diff >= 2i32.pow(20) || diff < -(2i32.pow(20)) {
+            panic!("unsupported difference");
+        }
+
+        // j diff
+        let instr = 0x6f | j_type(diff);
+        push_instr(code, instr);
+    } else {
+        block_refs.insert(code.data.len(), next_block);
+        let instr = 0x6f;
+        push_instr(code, instr);
+    }
+}
+
+fn phi<T>(code: &mut GeneratedCode<T>, func: &IrFunction, block: &IrBasicBlock, local_to_register: &HashMap<usize, Register>) {
+    let mut phi = None;
+    'a: for block2 in func.blocks.iter().skip(block.id + 1) {
+        for ssa in block2.ssas.iter() {
+            if let IrInstruction::Phi = ssa.instr {
+                let mut args = ssa.args.iter();
+                while let Some(arg) = args.next() {
+                    if let IrArgument::BasicBlock(id) = arg {
+                        if *id == block.id {
+                            phi = Some(args.next().unwrap());
+                            break 'a;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(phi) = phi {
+        if let IrArgument::Local(local) = phi {
+            let local = *local_to_register.get(local).unwrap();
+            generate_mov(code, Register::T6, local);
+        } else {
+            unreachable!();
+        }
+    }
 }
 
 pub fn generate_start_fn(code: &mut GeneratedCode<RiscVRelocations>) {

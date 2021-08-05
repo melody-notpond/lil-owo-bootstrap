@@ -7,10 +7,6 @@ pub enum IrInstruction {
     /// Calls the first argument by passing along the rest of the arguments into it.
     Call,
 
-    /// Creates a list with the given arguments as its elements. If no arguments are supplied, it
-    /// will create a list of length and capacity 0.
-    List,
-
     /// Loads its argument into the provided local.
     Load,
 
@@ -51,7 +47,6 @@ impl Display for IrInstruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             IrInstruction::Call => write!(f, "call"),
-            IrInstruction::List => write!(f, "list"),
             IrInstruction::Load => write!(f, "load"),
             IrInstruction::Set => write!(f, "set"),
             IrInstruction::Literal => write!(f, "literal"),
@@ -68,7 +63,8 @@ impl Display for IrInstruction {
 
 #[derive(Clone, PartialEq)]
 pub enum IrArgument {
-    Literal(f64),
+    Float(f64),
+    Int(i32),
     Local(usize),
     Argument(usize),
     Atom(String),
@@ -80,7 +76,8 @@ pub enum IrArgument {
 impl Display for IrArgument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IrArgument::Literal(float) => write!(f, "{}", float),
+            IrArgument::Float(float) => write!(f, "{}", float),
+            IrArgument::Int(int) => write!(f, "{}", int),
             IrArgument::Local(local) => write!(f, "%{}", local),
             IrArgument::Argument(arg) => write!(f, "${}", arg),
             IrArgument::Atom(atom) => write!(f, "#{}", atom),
@@ -210,7 +207,7 @@ fn ast_to_ir_helper<'a>(
     block: &mut IrBasicBlock,
 ) -> Result<Option<usize>, IrError> {
     match ast {
-        Ast::Number(float) => {
+        Ast::Float(float) => {
             let local = Some(func.last_local);
             func.last_local += 1;
 
@@ -220,7 +217,23 @@ fn ast_to_ir_helper<'a>(
                 local_register: 0,
                 global: false,
                 instr: IrInstruction::Literal,
-                args: vec![IrArgument::Literal(float)],
+                args: vec![IrArgument::Float(float)],
+            });
+
+            Ok(local)
+        }
+
+        Ast::Int(int) => {
+            let local = Some(func.last_local);
+            func.last_local += 1;
+
+            block.ssas.push(IrSsa {
+                local,
+                local_lifetime: 0,
+                local_register: 0,
+                global: false,
+                instr: IrInstruction::Literal,
+                args: vec![IrArgument::Int(int)],
             });
 
             Ok(local)
@@ -297,8 +310,17 @@ fn ast_to_ir_helper<'a>(
                 Ast::Symbol("atom") => {
                     let scope = scope.last_mut().unwrap();
                     for arg in args {
-                        if let Ast::Symbol(atom) = arg {
-                            scope.insert(String::from(atom), IrArgument::Atom(String::from(atom)));
+                        match arg {
+                            Ast::Symbol("true") => {
+                                scope.insert(String::from("true"), IrArgument::Int(1));
+                            }
+                            Ast::Symbol("false") => {
+                                scope.insert(String::from("false"), IrArgument::Int(0));
+                            }
+                            Ast::Symbol(atom) => {
+                                scope.insert(String::from(atom), IrArgument::Atom(String::from(atom)));
+                            }
+                            _ => (),
                         }
                     }
 
@@ -307,11 +329,9 @@ fn ast_to_ir_helper<'a>(
 
                 Ast::Symbol("seq") => {
                     let mut last = None;
-                    let last_index = args.len() - 1;
-                    for (i, arg) in args.into_iter().enumerate() {
-                        last = ast_to_ir_helper(arg, scope, module, func, block)?;
-                        if i + 1 < last_index && last.is_some() {
-                            block.ssas.last_mut().unwrap().local = None;
+                    for arg in args.into_iter() {
+                        if let Some(v) = ast_to_ir_helper(arg, scope, module, func, block)? {
+                            last = Some(v);
                         }
                     }
                     Ok(last)
@@ -660,7 +680,26 @@ fn ast_to_ir_helper<'a>(
         }
 
         Ast::List(elements) => {
-            let mut args = vec![];
+            let mut args = vec![IrArgument::Function(String::from("list")), IrArgument::Int(0)];
+
+            let mut contains = false;
+            for func in module.funcs.iter() {
+                if func.name == "list" {
+                    contains = true;
+                    break;
+                }
+            }
+            if !contains {
+                module.funcs.push(IrFunction {
+                    name: String::from("list"),
+                    external: true,
+                    argc: 0,
+                    captured: vec![],
+                    blocks: vec![],
+                    last_local: 0,
+                });
+            }
+
             for e in elements {
                 if let Some(v) = ast_to_ir_helper(e, scope, module, func, block)? {
                     args.push(IrArgument::Local(v));
@@ -670,12 +709,14 @@ fn ast_to_ir_helper<'a>(
             let local = Some(func.last_local);
             func.last_local += 1;
 
+            args[1] = IrArgument::Int(args.len() as i32 - 2);
+
             block.ssas.push(IrSsa {
                 local,
                 local_lifetime: 0,
                 local_register: 0,
                 global: false,
-                instr: IrInstruction::List,
+                instr: IrInstruction::Call,
                 args,
             });
 
@@ -886,9 +927,9 @@ fn inliner(func: &mut IrFunction) {
     let mut changed = true;
     while changed {
         changed = false;
-        for block in func.blocks.iter_mut() {
-            let mut locals_to_inlined = HashMap::new();
+        let mut locals_to_inlined = HashMap::new();
 
+        for block in func.blocks.iter_mut() {
             for ssa in block.ssas.iter_mut() {
                 if matches!(ssa.instr, IrInstruction::Load | IrInstruction::Literal)
                     && ssa.local.is_some()
@@ -958,29 +999,7 @@ pub fn ast_to_ir(ast: Ast) -> Result<IrModule, IrError> {
         },
     };
 
-    let mut scope = vec![vec![
-        ("+", IrArgument::Function(String::from("+"))),
-        ("-", IrArgument::Function(String::from("-"))),
-        ("*", IrArgument::Function(String::from("*"))),
-        ("/", IrArgument::Function(String::from("/"))),
-        ("//", IrArgument::Function(String::from("//"))),
-        ("%", IrArgument::Function(String::from("%"))),
-        ("<", IrArgument::Function(String::from("<"))),
-        (">", IrArgument::Function(String::from(">"))),
-        ("<=", IrArgument::Function(String::from("<="))),
-        (">=", IrArgument::Function(String::from(">="))),
-        ("&", IrArgument::Function(String::from("&"))),
-        ("|", IrArgument::Function(String::from("|"))),
-        ("^", IrArgument::Function(String::from("^"))),
-        (">>", IrArgument::Function(String::from(">>"))),
-        ("<<", IrArgument::Function(String::from("<<"))),
-        ("nil", IrArgument::Atom(String::from("nil"))),
-        ("true", IrArgument::Atom(String::from("true"))),
-        ("false", IrArgument::Atom(String::from("false"))),
-    ]
-    .into_iter()
-    .map(|v| (String::from(v.0), v.1))
-    .collect()];
+    let mut scope = vec![HashMap::new()];
 
     let ret = ast_to_ir_helper(ast, &mut scope, &mut module, &mut func, &mut block)?;
     if let Some(ret) = ret {

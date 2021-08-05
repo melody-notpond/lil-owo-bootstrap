@@ -6,7 +6,8 @@ pub enum Token<'a> {
     LBrack,
     RBrack,
     Symbol(&'a str),
-    Number(f64),
+    Float(f64),
+    Int(i32),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -98,7 +99,13 @@ impl<'a> Iterator for Lexer<'a> {
                 if b'0' <= bytes[start] && bytes[start] <= b'9' {
                     if let Ok(v) = self.s[start..end].parse() {
                         Some(TokenValue {
-                            value: Token::Number(v),
+                            value: Token::Int(v),
+                            start,
+                            end,
+                        })
+                    } else if let Ok(v) = self.s[start..end].parse() {
+                        Some(TokenValue {
+                            value: Token::Float(v),
                             start,
                             end,
                         })

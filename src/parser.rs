@@ -2,7 +2,8 @@ use super::lexer::{Lexer, Token, TokenValue};
 
 #[derive(Debug)]
 pub enum Ast<'a> {
-    Number(f64),
+    Float(f64),
+    Int(i32),
     Symbol(&'a str),
     SExpr(Box<Ast<'a>>, Vec<Ast<'a>>),
     List(Vec<Ast<'a>>),
@@ -82,7 +83,8 @@ fn parse_value<'a>(lexer: &mut Lexer<'a>) -> Result<Ast<'a>, ParseError> {
         }
 
         Token::Symbol(s) => Ok(Ast::Symbol(s)),
-        Token::Number(v) => Ok(Ast::Number(v)),
+        Token::Int(v) => Ok(Ast::Int(v)),
+        Token::Float(v) => Ok(Ast::Float(v)),
     }
 }
 
