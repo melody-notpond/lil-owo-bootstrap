@@ -4,7 +4,7 @@ use super::super::ir::{IrArgument, IrBasicBlock, IrFunction, IrInstruction, IrMo
 use super::{linear_scan, GeneratedCode, NaNBoxedTag};
 
 const ARG_REGISTER_COUNT: usize = 8;
-const NONARG_REGISTER_COUNT: usize = 16;
+const NONARG_REGISTER_COUNT: usize = 15;
 
 #[derive(Debug)]
 pub enum RiscVRelocations {
@@ -28,7 +28,7 @@ impl RiscVRelocations {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(dead_code)]
 enum Register {
     // Zero
@@ -77,11 +77,11 @@ enum Register {
     S10,
     S11,
 
-    // Temporaries (locals)
+    // Temporary (locals)
     T3,
-    T4,
 
     // Temporary registers for calculations
+    T4,
     T5,
     T6,
 
@@ -90,6 +90,9 @@ enum Register {
 
     // Spilled arguments
     Arg(usize),
+
+    // Spilled arguments when pushing to stack
+    AntiArg(usize, usize),
 }
 
 impl Register {
@@ -103,7 +106,7 @@ impl Register {
 
     fn is_register(&self) -> bool {
         use Register::*;
-        !matches!(self, Spilled(_) | Arg(_))
+        !matches!(self, Spilled(_) | Arg(_) | AntiArg(_, _))
     }
 
     fn convert_arg_register_id(id: usize) -> Register {
@@ -139,7 +142,6 @@ impl Register {
             12 => T1,
             13 => T2,
             14 => T3,
-            15 => T4,
             _ => Spilled(id - NONARG_REGISTER_COUNT),
         }
     }
@@ -181,7 +183,7 @@ impl Register {
             T6 => 31,
 
             Spilled(_) => panic!("Spilled values are not registers!"),
-            Arg(_) => panic!("Arguments on the stack are not registers!"),
+            Arg(_) | AntiArg(_, _) => panic!("Arguments on the stack are not registers!"),
         }
     }
 }
@@ -298,14 +300,58 @@ fn generate_mov<T>(
     dest: Register,
     source: Register,
 ) {
+    if dest == source {
+        return;
+    }
+
     match (dest.is_register(), source.is_register()) {
         (true, true) => {
             let instr = 0x0013 | (dest.get_register() << 7) | (source.get_register() << 15);
             push_instr(code, instr);
         }
 
-        (true, false) => todo!(),
-        (false, true) => todo!(),
+        (true, false) => {
+            match source {
+                // TODO: temporarily disable inlining to test this
+                Register::Spilled(local) => {
+                    let offset = ((local as i32 + 1) * 8) as u32;
+                    let instr = 0x3003 | (dest.get_register() << 7) | (Register::Fp.get_register() << 15) | ((offset & 0xfff) << 20);
+                    push_instr(code, instr);
+                }
+
+                Register::Arg(arg) => {
+                    let offset = (-(arg as i32 + 1) * 8) as u32;
+                    let instr = 0x3003 | (dest.get_register() << 7) | (Register::Fp.get_register() << 15) | ((offset & 0xfff) << 20);
+                    push_instr(code, instr);
+                }
+
+                _ => unreachable!()
+            }
+        }
+
+        (false, true) => {
+            match dest {
+                Register::Spilled(local) => {
+                    let offset = ((local as i32 + 1) * 8) as u32;
+                    let instr = 0x3023 | (source.get_register() << 20) | (Register::Fp.get_register() << 15) | ((offset & 0xfe0) << 20) | ((offset & 0x1f) << 7);
+                    push_instr(code, instr);
+                }
+
+                Register::Arg(arg) => {
+                    let offset = (-(arg as i32 + 1) * 8) as u32;
+                    let instr = 0x3023 | (source.get_register() << 20) | (Register::Fp.get_register() << 15) | ((offset & 0xfe0) << 20) | ((offset & 0x1f) << 7);
+                    push_instr(code, instr);
+                }
+
+                Register::AntiArg(arg, count) => {
+                    let offset = ((count - arg) * 8) as u32;
+                    let instr = 0x3023 | (source.get_register() << 20) | (Register::Sp.get_register() << 15) | ((offset & 0xfe0) << 20) | ((offset & 0x1f) << 7);
+                    push_instr(code, instr);
+                }
+
+                _ => unreachable!()
+            }
+        }
 
         (false, false) => {
             generate_mov(code, Register::T6, source);
@@ -346,11 +392,8 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
 
         code.addrs.insert(func.name.clone(), code.data.len()..0);
 
-        // addi sp, sp, -16
-        push_instr(&mut code, 0xff010113);
-
-        // sd ra, 8(sp)
-        push_instr(&mut code, 0x00113423);
+        // addi sp, sp, 8
+        push_instr(&mut code, 0xff810113);
 
         // sd fp, 0(sp)
         push_instr(&mut code, 0x00813023);
@@ -363,7 +406,6 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
             for ssa in block.ssas.iter() {
                 if ssa.local.is_some()
                     && Register::convert_nonarg_register_id(ssa.local_register).is_callee_saved()
-                    && !used_registers.contains(&ssa.local_register)
                 {
                     used_registers.insert(ssa.local_register);
                 }
@@ -424,6 +466,11 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
 
                         for (i, arg) in ssa.args.iter().skip(1).enumerate() {
                             let dest = Register::convert_arg_register_id(i);
+                            let dest = if dest.is_register() {
+                                dest
+                            } else {
+                                Register::AntiArg(i - ARG_REGISTER_COUNT, ssa.args.len() - ARG_REGISTER_COUNT - 1)
+                            };
 
                             match arg {
                                 IrArgument::Float(float) => {
@@ -431,7 +478,7 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                                 }
 
                                 IrArgument::Int(int) => {
-                                    load_float(&mut code, Register::A0, NaNBoxedTag::Integer(*int).get_tagged_nan());
+                                    load_float(&mut code, dest, NaNBoxedTag::Integer(*int).get_tagged_nan());
                                 }
 
                                 IrArgument::Local(_) => todo!(),
@@ -569,14 +616,11 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                     // mv sp, fp
                     push_instr(&mut code, 0x00040113);
 
-                    // ld ra, 8(sp)
-                    push_instr(&mut code, 0x00813083);
-
                     // ld fp, 0(sp)
                     push_instr(&mut code, 0x00013403);
 
-                    // addi sp, sp, 16
-                    push_instr(&mut code, 0x01010113);
+                    // addi sp, sp, 8
+                    push_instr(&mut code, 0x00810113);
 
                     // ret
                     push_instr(&mut code, 0x00008067);
@@ -609,7 +653,10 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                     phi(&mut code, func, block, &local_to_register);
 
                     let reg = match condition {
-                        IrArgument::Float(_) => todo!(),
+                        IrArgument::Float(float) => {
+                            load_float(&mut code, Register::T5, *float);
+                            Register::T5
+                        }
 
                         IrArgument::Int(int) => {
                             load_int(&mut code, Register::T5, *int);

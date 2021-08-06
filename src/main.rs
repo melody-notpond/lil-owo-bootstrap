@@ -11,12 +11,8 @@ use lil_owo_bootstrap::codegen::riscv;
 
 fn main() {
     let mut parse = "
-        (atom true false)
-        (extern test)
-        (cond
-            (true (test 0))
-            (false (test 1))
-            (else (test 2)))
+    (func f (a0 a1 a2 a3 a4 a5 a6 a7 a8 a9) (a9))
+    (f 0 1 2 3 4 5 6 7 8 9)
     ";
 
     let mut v = String::from("seq\n");
