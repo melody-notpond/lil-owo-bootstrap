@@ -481,9 +481,17 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                                     load_float(&mut code, dest, NaNBoxedTag::Integer(*int).get_tagged_nan());
                                 }
 
-                                IrArgument::Local(_) => todo!(),
+                                IrArgument::Local(local) => {
+                                    let local = *local_to_register.get(local).unwrap();
+                                    generate_mov(&mut code, dest, local);
+                                }
+
                                 IrArgument::Argument(_) => todo!(),
-                                IrArgument::Atom(_) => todo!(),
+
+                                IrArgument::Atom(atom) => {
+                                    load_atom(&mut code, &mut last_label, dest, atom);
+                                }
+
                                 IrArgument::Function(_) => todo!(),
                                 IrArgument::BasicBlock(_) => todo!(),
                                 IrArgument::Closed(_) => todo!(),
@@ -496,7 +504,13 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                             IrArgument::Atom(_) => unreachable!(),
                             IrArgument::BasicBlock(_) => unreachable!(),
 
-                            IrArgument::Local(_) => todo!(),
+                            IrArgument::Local(local) => {
+                                // jalr lower 12 bits of the offset(t6)
+                                let local = *local_to_register.get(local).unwrap();
+                                let instr = 0x67 | (local.get_register() << 15) | (Register::Ra.get_register() << 7);
+                                push_instr(&mut code, instr);
+                            }
+
                             IrArgument::Argument(_) => todo!(),
 
                             IrArgument::Function(func) => {
@@ -663,7 +677,11 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                             Register::T5
                         }
 
-                        IrArgument::Atom(_) => todo!(),
+                        IrArgument::Atom(atom) => {
+                            load_atom(&mut code, &mut last_label, Register::T5, atom);
+                            Register::T5
+                        }
+
                         IrArgument::Function(_) => todo!(),
 
                         IrArgument::Local(local) => {
@@ -676,7 +694,16 @@ pub fn generate_code(root: &mut IrModule) -> GeneratedCode<RiscVRelocations> {
                             }
                         }
 
-                        IrArgument::Argument(_) => todo!(),
+                        IrArgument::Argument(arg) => {
+                            let arg = Register::convert_arg_register_id(*arg);
+                            if arg.is_register() {
+                                arg
+                            } else {
+                                generate_mov(&mut code, Register::T5, arg);
+                                Register::T5
+                            }
+                        }
+
                         IrArgument::Closed(_) => todo!(),
 
                         IrArgument::BasicBlock(_) => unreachable!(),
